@@ -1,0 +1,38 @@
+diff --git a/src/common/vfs.h b/src/common/vfs.h
+index 16a366b7..c870ba91 100644
+--- a/src/common/vfs.h
++++ b/src/common/vfs.h
+@@ -289,6 +289,7 @@ public slots:
+     virtual void fileStatusChanged(const QString &systemFileName, OCC::SyncFileStatus fileStatus) = 0;
+ 
+ signals:
++    void syncRequested(const QString &folderPath);
+     /// Emitted when a user-initiated hydration starts
+     void beginHydrating();
+     /// Emitted when the hydration ends
+diff --git a/src/gui/folder.cpp b/src/gui/folder.cpp
+index 04d919b4..0dd64f10 100644
+--- a/src/gui/folder.cpp
++++ b/src/gui/folder.cpp
+@@ -539,6 +539,11 @@ void Folder::startVfs()
+     connect(_vfs.data(), &Vfs::beginHydrating, this, &Folder::slotHydrationStarts);
+     connect(_vfs.data(), &Vfs::doneHydrating, this, &Folder::slotHydrationDone);
+     connect(_vfs.data(), &Vfs::failureHydrating, this, &Folder::slotHydrationFailed);
++    _vfs->setDemandDrivenDiscoveryEnabled(_vfs->mode() == Vfs::Fuse);
++    connect(_vfs.data(), &Vfs::syncRequested, this, [this](const QString &relativePath) {
++        schedulePathForLocalDiscovery(relativePath);
++        scheduleThisFolderSoon();
++    });
+ 
+     connect(&_engine->syncFileStatusTracker(), &SyncFileStatusTracker::fileStatusChanged,
+             _vfs.data(), &Vfs::fileStatusChanged);
+@@ -1289,6 +1293,9 @@ void Folder::slotSyncFinished(bool success)
+         _syncResult.setStatus(SyncResult::Success);
+     }
+ 
++    if (success) {
++        _vfs->initialDiscoveryFinished();
++    }
+     // Count the number of syncs that have failed in a row.
+     if (_syncResult.status() == SyncResult::Success
+         || _syncResult.status() == SyncResult::Problem) {

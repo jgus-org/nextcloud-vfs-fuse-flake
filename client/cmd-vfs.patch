@@ -1,0 +1,149 @@
+--- a/src/cmd/cmd.cpp
++++ b/src/cmd/cmd.cpp
+@@ -16,0 +17 @@
++#include <QTimer>
+@@ -28,0 +30 @@
++#include "common/vfs.h"
+@@ -49,0 +52 @@
++constexpr int daemonRestartCode = 64;
+@@ -73,0 +77,5 @@
++    Vfs::Mode vfsMode = Vfs::Off;
++    PinState rootPinState = PinState::Unspecified;
++    bool downloadOnly = false;
++    bool vfsDaemon = false;
++    int syncIntervalSeconds = 30;
+@@ -185,0 +194,5 @@
++    std::cout << "  --vfs [mode]           Virtual files mode: off, suffix, wincfapi, xattr, fuse" << std::endl;
++    std::cout << "  --root-pin [state]     Pin state applied to the sync root: unspecified, alwayslocal, onlineonly" << std::endl;
++    std::cout << "  --download-only        Suppress every upload, remote rename and remote delete" << std::endl;
++    std::cout << "  --vfs-daemon           Keep serving virtual files and synchronize periodically" << std::endl;
++    std::cout << "  --sync-interval [n]    Seconds between daemon synchronization runs" << std::endl;
+@@ -195,0 +209,12 @@
++Optional<PinState> pinStateFromString(const QString &str)
++{
++    if (str == QLatin1String("unspecified")) {
++        return PinState::Unspecified;
++    } else if (str == QLatin1String("alwayslocal")) {
++        return PinState::AlwaysLocal;
++    } else if (str == QLatin1String("onlineonly")) {
++        return PinState::OnlineOnly;
++    }
++    return {};
++}
++
+@@ -263,0 +289,28 @@
++        } else if (option == "--vfs" && !it.peekNext().startsWith("-")) {
++            const QString modeName = it.next();
++            const auto mode = Vfs::modeFromString(modeName);
++            if (!mode) {
++                std::cerr << "Unknown virtual files mode '" << qPrintable(modeName) << "'." << std::endl;
++                exit(1);
++            }
++            options->vfsMode = *mode;
++        } else if (option == "--download-only") {
++            options->downloadOnly = true;
++        } else if (option == "--root-pin" && !it.peekNext().startsWith("-")) {
++            const QString pinStateName = it.next();
++            const auto pinState = pinStateFromString(pinStateName);
++            if (!pinState) {
++                std::cerr << "Unknown pin state '" << qPrintable(pinStateName) << "'." << std::endl;
++                exit(1);
++            }
++            options->rootPinState = *pinState;
++        } else if (option == "--vfs-daemon") {
++            options->vfsDaemon = true;
++        } else if (option == "--sync-interval" && !it.peekNext().startsWith("-")) {
++            bool valid = false;
++            const auto interval = it.next().toInt(&valid);
++            if (!valid || interval < 1 || interval > 86400) {
++                std::cerr << "The sync interval is not between 1 and 86400 seconds." << std::endl;
++                exit(1);
++            }
++            options->syncIntervalSeconds = interval;
+@@ -537,0 +591,9 @@
++
++    QSharedPointer<Vfs> vfs(createVfsFromPlugin(options.vfsMode).release());
++    if (!vfs) {
++        qCritical() << "Could not create a virtual files instance for mode" << Vfs::modeToString(options.vfsMode);
++        return EXIT_FAILURE;
++    }
++    vfs->setDemandDrivenDiscoveryEnabled(options.vfsDaemon && options.vfsMode == Vfs::Fuse);
++    syncOptions._vfs = vfs;
++
+@@ -538,0 +600,51 @@
++
++    if (options.downloadOnly) {
++        QObject::connect(&engine, &SyncEngine::aboutToPropagate, [](SyncFileItemVector &items) {
++            for (const auto &item : items) {
++                const auto writesToServer = item->_direction == SyncFileItem::Up
++                    || item->_instruction == CSYNC_INSTRUCTION_CONFLICT
++                    || item->_instruction == CSYNC_INSTRUCTION_CASE_CLASH_CONFLICT;
++                if (writesToServer) {
++                    qWarning() << "download-only: suppressing" << item->_instruction << "on" << item->_file;
++                    item->_instruction = CSYNC_INSTRUCTION_IGNORE;
++                }
++            }
++        });
++    }
++
++    VfsSetupParams vfsParams;
++    vfsParams.filesystemPath = options.source_dir;
++    vfsParams.remotePath = Utility::trailingSlashPath(folder);
++    vfsParams.account = account;
++    vfsParams.journal = &db;
++    vfsParams.providerName = Theme::instance()->appNameGUI();
++    vfsParams.providerVersion = Theme::instance()->version();
++    QObject::connect(&engine.syncFileStatusTracker(), &SyncFileStatusTracker::fileStatusChanged,
++        vfs.data(), &Vfs::fileStatusChanged);
++    vfs->start(vfsParams);
++
++    if (options.vfsMode != Vfs::Off) {
++        const auto rootPin = db.internalPinStates().rawForPath(QByteArray());
++        if (!rootPin) {
++            qCritical() << "Could not read the virtual-files root pin state";
++            return EXIT_FAILURE;
++        }
++        if (*rootPin == PinState::Inherited) {
++            db.internalPinStates().setForPath(QByteArray(), options.rootPinState);
++        }
++    }
++
++    bool syncFinished = false;
++    bool syncRequested = false;
++    QTimer daemonTimer;
++    daemonTimer.setSingleShot(true);
++    QObject::connect(&daemonTimer, &QTimer::timeout, &app, [&app] {
++        app.exit(daemonRestartCode);
++    });
++    QObject::connect(vfs.data(), &Vfs::syncRequested, &app, [&](const QString &) {
++        syncRequested = true;
++        if (syncFinished) {
++            daemonTimer.start(0);
++        }
++    });
++
+@@ -542 +654,15 @@
+-        [&app](bool result) { app.exit(result ? EXIT_SUCCESS : EXIT_FAILURE); });
++        [&](bool result) {
++            if (result) {
++                vfs->initialDiscoveryFinished();
++            }
++            if (result && options.vfsDaemon) {
++                syncFinished = true;
++                qInfo() << "Sync finished; serving virtual files";
++                daemonTimer.start(
++                    syncRequested || engine.isAnotherSyncNeeded() != NoFollowUpSync
++                        ? 0
++                        : options.syncIntervalSeconds * 1000);
++                return;
++            }
++            app.exit(result ? EXIT_SUCCESS : EXIT_FAILURE);
++        });
+@@ -571,0 +695,7 @@
++
++    vfs->stop();
++
++    if (options.vfsDaemon && resultCode == daemonRestartCode) {
++        restartCount = 0;
++        goto restart_sync;
++    }

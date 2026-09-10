@@ -1,0 +1,287 @@
+diff --git a/src/common/vfs.cpp b/src/common/vfs.cpp
+index 9ae456aa..32e73fe7 100644
+--- a/src/common/vfs.cpp
++++ b/src/common/vfs.cpp
+@@ -195,6 +195,10 @@ Vfs::Mode OCC::bestAvailableVfsMode()
+         return Vfs::WindowsCfApi;
+     }
+ 
++    if (isVfsPluginAvailable(Vfs::Fuse)) {
++        return Vfs::Fuse;
++    }
++
+     if (isVfsPluginAvailable(Vfs::WithSuffix)) {
+         return Vfs::WithSuffix;
+     }
+diff --git a/src/common/vfs.h b/src/common/vfs.h
+index 22afa9b1..16a366b7 100644
+--- a/src/common/vfs.h
++++ b/src/common/vfs.h
+@@ -160,6 +160,8 @@ public:
+     /// Access to the parameters the instance was start()ed with.
+     [[nodiscard]] const VfsSetupParams &params() const { return _setupParams; }
+ 
++    [[nodiscard]] virtual QString userFacingPath() const { return _setupParams.filesystemPath; }
++
+ 
+     /** Initializes interaction with the VFS provider.
+      *
+diff --git a/src/gui/folder.cpp b/src/gui/folder.cpp
+index b8441bcb..04d919b4 100644
+--- a/src/gui/folder.cpp
++++ b/src/gui/folder.cpp
+@@ -234,9 +234,15 @@ QString Folder::path() const
+     return _canonicalLocalPath;
+ }
+ 
++QString Folder::userFacingPath() const
++{
++    const auto vfsPath = _vfs->userFacingPath();
++    return vfsPath.isEmpty() ? path() : vfsPath;
++}
++
+ QString Folder::shortGuiLocalPath() const
+ {
+-    QString p = _definition.localPath;
++    QString p = userFacingPath();
+     const auto home = Utility::trailingSlashPath(QDir::homePath());
+ 
+     if (p.startsWith(home)) {
+diff --git a/src/gui/folder.h b/src/gui/folder.h
+index 1dda8687..7b4f15fb 100644
+--- a/src/gui/folder.h
++++ b/src/gui/folder.h
+@@ -144,6 +144,8 @@ public:
+      */
+     [[nodiscard]] QString path() const;
+ 
++    [[nodiscard]] QString userFacingPath() const;
++
+     /**
+      * cleaned canonical folder path, like path() but never ends with a /
+      *
+diff --git a/src/gui/folderstatusmodel.cpp b/src/gui/folderstatusmodel.cpp
+index 42a27bf6..76d8ce48 100644
+--- a/src/gui/folderstatusmodel.cpp
++++ b/src/gui/folderstatusmodel.cpp
+@@ -199,7 +199,7 @@ QVariant FolderStatusModel::data(const QModelIndex &index, int role) const
+         case FolderStatusDelegate::FolderPathRole:
+         {
+             if (const auto folder = subfolderInfo._folder) {
+-                return {folder->path() + subfolderInfo._path};
++                return {folder->userFacingPath() + subfolderInfo._path};
+             }
+             return {};
+         }
+diff --git a/src/gui/folderwizard.cpp b/src/gui/folderwizard.cpp
+index fae6d197..d1660db3 100644
+--- a/src/gui/folderwizard.cpp
++++ b/src/gui/folderwizard.cpp
+@@ -622,7 +622,7 @@ void FolderWizardSelectiveSync::initializePage()
+ bool FolderWizardSelectiveSync::validatePage()
+ {
+     const auto mode = bestAvailableVfsMode();
+-    const bool useVirtualFiles = (mode == Vfs::WindowsCfApi) && (_virtualFilesCheckBox && _virtualFilesCheckBox->isChecked());
++    const bool useVirtualFiles = mode != Vfs::Off && _virtualFilesCheckBox && _virtualFilesCheckBox->isChecked();
+     if (useVirtualFiles) {
+         const auto availability = Vfs::checkAvailability(wizard()->field(QStringLiteral("sourceFolder")).toString(), mode);
+         if (!availability) {
+diff --git a/src/gui/owncloudgui.cpp b/src/gui/owncloudgui.cpp
+index 1ab9ce9d..5918d2da 100644
+--- a/src/gui/owncloudgui.cpp
++++ b/src/gui/owncloudgui.cpp
+@@ -500,12 +500,12 @@ void ownCloudGui::slotFolderOpenAction(const QString &alias)
+ {
+     Folder *f = FolderMan::instance()->folder(alias);
+     if (f) {
+-        qCInfo(lcApplication) << "opening local url " << f->path();
+-        QUrl url = QUrl::fromLocalFile(f->path());
++        qCInfo(lcApplication) << "opening local url " << f->userFacingPath();
++        QUrl url = QUrl::fromLocalFile(f->userFacingPath());
+ 
+ #ifdef Q_OS_WIN
+         // work around a bug in QDesktopServices on Win32, see i-net
+-        QString filePath = f->path();
++        QString filePath = f->userFacingPath();
+ 
+         if (filePath.startsWith(QLatin1String("\\\\")) || filePath.startsWith(QLatin1String("//")))
+             url = QUrl::fromLocalFile(QDir::toNativeSeparators(filePath));
+diff --git a/src/gui/socketapi/socketapi.cpp b/src/gui/socketapi/socketapi.cpp
+index eb2f4c4d..1fdd0022 100644
+--- a/src/gui/socketapi/socketapi.cpp
++++ b/src/gui/socketapi/socketapi.cpp
+@@ -97,6 +97,32 @@ QStringList split(const QString &data)
+     return data.split(RecordSeparator());
+ }
+ 
++OCC::Folder *folderForSocketPath(const QString &path, QString *rootPath = nullptr)
++{
++    const auto cleanedPath = QDir::cleanPath(path);
++    const auto containsPath = [&cleanedPath](const QString &candidate) {
++        const auto cleanedCandidate = QDir::cleanPath(candidate);
++        return cleanedPath == cleanedCandidate || cleanedPath.startsWith(cleanedCandidate + QLatin1Char('/'));
++    };
++
++    if (auto *folder = OCC::FolderMan::instance()->folderForPath(cleanedPath)) {
++        if (rootPath) {
++            *rootPath = folder->cleanPath();
++        }
++        return folder;
++    }
++
++    for (auto *folder : OCC::FolderMan::instance()->map()) {
++        if (containsPath(folder->userFacingPath())) {
++            if (rootPath) {
++                *rootPath = QDir::cleanPath(folder->userFacingPath());
++            }
++            return folder;
++        }
++    }
++    return nullptr;
++}
++
+ #if GUI_TESTING
+ 
+ using namespace OCC;
+@@ -339,7 +365,7 @@ void SocketApi::slotNewConnection()
+     _listeners.insert(socket, listener);
+     for (Folder *f : FolderMan::instance()->map()) {
+         if (f->canSync()) {
+-            QString message = buildRegisterPathMessage(removeTrailingSlash(f->path()));
++            QString message = buildRegisterPathMessage(removeTrailingSlash(f->userFacingPath()));
+             qCDebug(lcSocketApi) << "Trying to send SocketAPI Register Path Message -->" << message << "to" << listener->socket;
+             listener->sendMessage(message);
+         }
+@@ -447,7 +473,7 @@ void SocketApi::slotRegisterPath(const QString &alias)
+ 
+     Folder *f = FolderMan::instance()->folder(alias);
+     if (f) {
+-        const QString message = buildRegisterPathMessage(removeTrailingSlash(f->path()));
++        const QString message = buildRegisterPathMessage(removeTrailingSlash(f->userFacingPath()));
+         for (const auto &listener : std::as_const(_listeners)) {
+             qCInfo(lcSocketApi) << "Trying to send SocketAPI Register Path Message -->" << message << "to" << listener->socket;
+             listener->sendMessage(message);
+@@ -464,7 +490,7 @@ void SocketApi::slotUnregisterPath(const QString &alias)
+ 
+     Folder *f = FolderMan::instance()->folder(alias);
+     if (f)
+-        broadcastMessage(buildMessage(QLatin1String("UNREGISTER_PATH"), removeTrailingSlash(f->path()), QString()), true);
++        broadcastMessage(buildMessage(QLatin1String("UNREGISTER_PATH"), removeTrailingSlash(f->userFacingPath()), QString()), true);
+ 
+     _registeredAliases.remove(alias);
+ }
+@@ -483,7 +509,7 @@ void SocketApi::slotUpdateFolderView(Folder *f)
+             || f->syncResult().status() == SyncResult::Problem
+             || f->syncResult().status() == SyncResult::Error
+             || f->syncResult().status() == SyncResult::SetupError) {
+-            QString rootPath = removeTrailingSlash(f->path());
++            QString rootPath = removeTrailingSlash(f->userFacingPath());
+             broadcastStatusPushMessage(rootPath, f->syncEngine().syncFileStatusTracker().fileStatus(""));
+ 
+             broadcastMessage(buildMessage(QLatin1String("UPDATE_VIEW"), rootPath));
+@@ -630,9 +656,13 @@ void SocketApi::processLeaveShareRequest(const QString &localFile, SocketListene
+ 
+ void SocketApi::broadcastStatusPushMessage(const QString &systemPath, SyncFileStatus fileStatus)
+ {
+-    QString msg = buildMessage(QLatin1String("STATUS"), systemPath, fileStatus.toSocketAPIString());
+-    Q_ASSERT(!systemPath.endsWith('/'));
+-    uint directoryHash = qHash(systemPath.left(systemPath.lastIndexOf('/')));
++    auto userFacingPath = systemPath;
++    if (auto *folder = FolderMan::instance()->folderForPath(systemPath)) {
++        userFacingPath = QDir::cleanPath(folder->userFacingPath()) + systemPath.mid(folder->cleanPath().size());
++    }
++    QString msg = buildMessage(QLatin1String("STATUS"), userFacingPath, fileStatus.toSocketAPIString());
++    Q_ASSERT(!userFacingPath.endsWith('/'));
++    uint directoryHash = qHash(userFacingPath.left(userFacingPath.lastIndexOf('/')));
+     for (const auto &listener : std::as_const(_listeners)) {
+         listener->sendMessageIfDirectoryMonitored(msg, directoryHash);
+     }
+@@ -1246,11 +1276,12 @@ SocketApi::FileData SocketApi::FileData::get(const QString &localFile)
+     if (data.localPath.endsWith(QLatin1Char('/')))
+         data.localPath.chop(1);
+ 
+-    data.folder = FolderMan::instance()->folderForPath(data.localPath);
++    QString rootPath;
++    data.folder = folderForSocketPath(data.localPath, &rootPath);
+     if (!data.folder)
+         return data;
+ 
+-    data.folderRelativePath = data.localPath.mid(data.folder->cleanPath().length() + 1);
++    data.folderRelativePath = data.localPath.mid(rootPath.length() + 1);
+     data.serverRelativePath = QDir(data.folder->remotePath()).filePath(data.folderRelativePath);
+     QString virtualFileExt = QStringLiteral(APPLICATION_DOTVIRTUALFILE_SUFFIX);
+     if (data.serverRelativePath.endsWith(virtualFileExt)) {
+@@ -1310,7 +1341,7 @@ void SocketApi::command_GET_MENU_ITEMS(const QString &argument, OCC::SocketListe
+     // syncFolder will be null if files are in different folders.
+     Folder *syncFolder = nullptr;
+     for (const auto &file : files) {
+-        auto folder = FolderMan::instance()->folderForPath(file);
++        auto folder = folderForSocketPath(file);
+         if (folder != syncFolder) {
+             if (!syncFolder) {
+                 syncFolder = folder;
+diff --git a/src/gui/tray/usermodel.cpp b/src/gui/tray/usermodel.cpp
+index f7a26ac8..7c3bbeae 100644
+--- a/src/gui/tray/usermodel.cpp
++++ b/src/gui/tray/usermodel.cpp
+@@ -945,7 +945,7 @@ UnifiedSearchResultsListModel *User::getUnifiedSearchResultsListModel() const
+ void User::openLocalFolder() const
+ {
+     if (const auto folder = getFolder()) {
+-        QDesktopServices::openUrl(QUrl::fromLocalFile(folder->path()));
++        QDesktopServices::openUrl(QUrl::fromLocalFile(folder->userFacingPath()));
+     }
+ }
+ 
+@@ -967,7 +967,7 @@ void User::openFolderLocallyOrInBrowser(const QString &fullRemotePath)
+     if (folder->journalDb()->getFileRecord(fullRemotePathToPathInDb, &rec) && rec.isValid()) {
+         // found folder locally, going to open
+         qCInfo(lcActivity) << "Opening locally a folder" << fullRemotePath;
+-        QDesktopServices::openUrl(QUrl::fromLocalFile(folder->path() + rec.path()));
++        QDesktopServices::openUrl(QUrl::fromLocalFile(folder->userFacingPath() + rec.path()));
+         return;
+     }
+ 
+diff --git a/src/gui/wizard/owncloudwizard.cpp b/src/gui/wizard/owncloudwizard.cpp
+index 572d1f10..35caaf1b 100644
+--- a/src/gui/wizard/owncloudwizard.cpp
++++ b/src/gui/wizard/owncloudwizard.cpp
+@@ -527,6 +527,25 @@ void OwncloudWizard::askExperimentalVirtualFilesFeature(QWidget *receiver, const
+         acceptButton = msgBox->addButton(tr("Enable experimental placeholder mode"), QMessageBox::AcceptRole);
+         msgBox->addButton(tr("Stay safe"), QMessageBox::RejectRole);
+         break;
++    case Vfs::Fuse:
++        msgBox = new QMessageBox(
++            QMessageBox::Warning,
++            tr("Enable experimental feature?"),
++            tr("When the \"virtual files\" mode is enabled all files remain visible, but their contents are downloaded only when opened or made available locally. "
++               "Files can be returned to online-only storage through their context menu."
++               "\n\n"
++               "The virtual files mode is mutually exclusive with selective sync. "
++               "Currently unselected folders will be translated to online-only folders "
++               "and your selective sync settings will be reset."
++               "\n\n"
++               "Switching to this mode will abort any currently running synchronization."
++               "\n\n"
++               "This is a new, experimental mode. If you decide to use it, please report any "
++               "issues that come up."),
++            QMessageBox::NoButton, receiver);
++        acceptButton = msgBox->addButton(tr("Enable experimental virtual files mode"), QMessageBox::AcceptRole);
++        msgBox->addButton(tr("Stay safe"), QMessageBox::RejectRole);
++        break;
+     case Vfs::XAttr:
+     case Vfs::Off:
+         Q_UNREACHABLE();
+diff --git a/src/libsync/theme.cpp b/src/libsync/theme.cpp
+index 81342a62..47f3319a 100644
+--- a/src/libsync/theme.cpp
++++ b/src/libsync/theme.cpp
+@@ -1006,7 +1006,7 @@ QPixmap Theme::createColorAwarePixmap(const QString &name)
+ bool Theme::showVirtualFilesOption() const
+ {
+     const auto vfsMode = bestAvailableVfsMode();
+-    return ConfigFile().showExperimentalOptions() || vfsMode == Vfs::WindowsCfApi;
++    return ConfigFile().showExperimentalOptions() || vfsMode == Vfs::WindowsCfApi || vfsMode == Vfs::Fuse;
+ }
+ 
+ bool Theme::enforceVirtualFilesSyncFolder() const

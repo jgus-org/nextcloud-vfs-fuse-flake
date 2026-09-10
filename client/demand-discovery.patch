@@ -1,0 +1,95 @@
+diff --git a/src/common/vfs.h b/src/common/vfs.h
+index 16a366b7..94cce835 100644
+--- a/src/common/vfs.h
++++ b/src/common/vfs.h
+@@ -189,6 +189,10 @@ public:
+      */
+     [[nodiscard]] virtual bool isHydrating() const = 0;
+ 
++    virtual void setDemandDrivenDiscoveryEnabled(bool) {}
++    [[nodiscard]] virtual bool demandDrivenDiscoveryEnabled() const { return false; }
++    virtual void initialDiscoveryFinished() {}
++
+     /** Update placeholder metadata during discovery.
+      *
+      * If the remote metadata changes, the local placeholder's metadata should possibly
+diff --git a/src/common/syncjournaldb.cpp b/src/common/syncjournaldb.cpp
+index 0f22ae62..bc15c367 100644
+--- a/src/common/syncjournaldb.cpp
++++ b/src/common/syncjournaldb.cpp
+@@ -2453,8 +2453,8 @@ void SyncJournalDb::schedulePathForRemoteDiscovery(const QByteArray &fileName)
+ 
+     SqlQuery query(_db);
+     // This query will match entries for which the path is a prefix of fileName
+-    // Note: CSYNC_FTW_TYPE_DIR == 2
+-    query.prepare("UPDATE metadata SET md5='_invalid_' WHERE " IS_PREFIX_PATH_OR_EQUAL("path", "?1") " AND type == 2;");
++    static_assert(ItemTypeDirectory == 2 && ItemTypeVirtualDirectory == 7, "");
++    query.prepare("UPDATE metadata SET md5='_invalid_' WHERE " IS_PREFIX_PATH_OR_EQUAL("path", "?1") " AND type IN (2, 7);");
+     query.bindValue(1, argument);
+ 
+     if (!query.exec()) {
+@@ -2893,6 +2893,6 @@ void SyncJournalDb::markVirtualFileForDownloadRecursively(const QByteArray &path
+-    static_assert(ItemTypeDirectory == 2, "");
++    static_assert(ItemTypeDirectory == 2 && ItemTypeVirtualDirectory == 7, "");
+     query.prepare("UPDATE metadata SET md5='_invalid_' WHERE "
+-                  "(" IS_PREFIX_PATH_OF("?1", "path") " OR ?1 == '' OR " IS_PREFIX_PATH_OR_EQUAL("path", "?1") ") AND type == 2;");
++                  "(" IS_PREFIX_PATH_OF("?1", "path") " OR ?1 == '' OR " IS_PREFIX_PATH_OR_EQUAL("path", "?1") ") AND type IN (2, 7);");
+     query.bindValue(1, path);
+ 
+     if (!query.exec()) {
+diff --git a/src/libsync/discovery.cpp b/src/libsync/discovery.cpp
+index ffd76f36..50654ecb 100644
+--- a/src/libsync/discovery.cpp
++++ b/src/libsync/discovery.cpp
+@@ -675,13 +675,12 @@ void ProcessDirectoryJob::postProcessServerNew(const SyncFileItemPtr &item,
+     const auto opts = _discoveryData->_syncOptions;
+ 
+     if (item->isDirectory()) {
+-        // // Turn new remote folders into virtual folders if the option is enabled.
+-        // if (!localEntry.isValid() &&
+-        //     opts._vfs->mode() == Vfs::WindowsCfApi &&
+-        //     _pinState != PinState::AlwaysLocal &&
+-        //     !FileSystem::isExcludeFile(item->_file)) {
+-        //     item->_type = ItemTypeVirtualDirectory;
+-        // }
++        if (!localEntry.isValid()
++            && opts._vfs->demandDrivenDiscoveryEnabled()
++            && _pinState != PinState::AlwaysLocal
++            && !FileSystem::isExcludeFile(item->_file)) {
++            item->_type = ItemTypeVirtualDirectory;
++        }
+ 
+         _pendingAsyncJobs++;
+         _discoveryData->checkSelectiveSyncNewFolder(path._server,
+@@ -734,8 +733,12 @@ void ProcessDirectoryJob::processFileAnalyzeRemoteInfo(const SyncFileItemPtr &it
+     item->_remotePerm = serverEntry.remotePerm;
+     item->_isShared = serverEntry.remotePerm.hasPermission(RemotePermissions::IsShared) || serverEntry.sharedByMe;
+     item->_sharedByMe = serverEntry.sharedByMe;
+     item->_lastShareStateFetchedTimestamp = QDateTime::currentMSecsSinceEpoch();
+-    item->_type = serverEntry.isDirectory ? ItemTypeDirectory : ItemTypeFile;
++    const auto remainsUndiscovered = dbEntry._type == ItemTypeVirtualDirectory
++        && dbEntry._etag != QByteArrayLiteral("_invalid_")
++        && _pinState != PinState::AlwaysLocal
++        && _discoveryData->_syncOptions._vfs->demandDrivenDiscoveryEnabled();
++    item->_type = remainsUndiscovered ? ItemTypeVirtualDirectory : serverEntry.isDirectory ? ItemTypeDirectory : ItemTypeFile;
+     item->_etag = serverEntry.etag;
+     item->_directDownloadUrl = serverEntry.directDownloadUrl;
+     item->_directDownloadCookies = serverEntry.directDownloadCookies;
+@@ -1914,11 +1916,13 @@ void ProcessDirectoryJob::processFileFinalize(const SyncFileItemPtr &item, PathT
+         recurse = false;
+     }
+ 
+     if (item->_type == ItemTypeVirtualDirectory) {
+-        // qCDebug(lcDisco()) << "do not recurse inside a virtual folder" << item->_file;
+-        // recurse = false;
+-        qCInfo(lcDisco()).nospace() << "changing virtual directory to normal directory file=" << item->_file;
+-        item->_type = ItemTypeDirectory;
++        if (_discoveryData->_syncOptions._vfs->demandDrivenDiscoveryEnabled()) {
++            recurse = false;
++        } else {
++            qCInfo(lcDisco()).nospace() << "changing virtual directory to normal directory file=" << item->_file;
++            item->_type = ItemTypeDirectory;
++        }
+     }
+ 
+     if (!(item->isDirectory() ||
