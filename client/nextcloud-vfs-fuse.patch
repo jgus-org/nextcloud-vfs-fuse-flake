@@ -1,0 +1,721 @@
+diff --git a/src/cmd/CMakeLists.txt b/src/cmd/CMakeLists.txt
+index 086df05..080533b 100644
+--- a/src/cmd/CMakeLists.txt
++++ b/src/cmd/CMakeLists.txt
+@@ -38,6 +38,11 @@ if(NOT BUILD_LIBRARIES_ONLY)
+ 
+   target_link_libraries(nextcloudcmd cmdCore nextcloudCore)
+ 
++  add_executable(nextcloudctl nextcloudctl.cpp)
++  ecm_mark_nongui_executable(nextcloudctl)
++  set_target_properties(nextcloudctl PROPERTIES RUNTIME_OUTPUT_NAME "${APPLICATION_EXECUTABLE}ctl")
++  target_link_libraries(nextcloudctl cmdCore nextcloudCore)
++
+   target_compile_definitions(nextcloudcmd PRIVATE QT_NO_KEYWORDS)
+ 
+   if(BUILD_OWNCLOUD_OSX_BUNDLE)
+@@ -47,7 +52,7 @@ if(NOT BUILD_LIBRARIES_ONLY)
+     set_target_properties(nextcloudcmd PROPERTIES
+       RUNTIME_OUTPUT_DIRECTORY ${BIN_OUTPUT_DIRECTORY})
+ 
+-    install(TARGETS nextcloudcmd
++    install(TARGETS nextcloudcmd nextcloudctl
+ 	  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+ 	  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ 	  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+diff --git a/src/cmd/cmd.cpp b/src/cmd/cmd.cpp
+index 163e6c4..77f03a9 100644
+--- a/src/cmd/cmd.cpp
++++ b/src/cmd/cmd.cpp
+@@ -58,6 +58,20 @@
+ using namespace OCC;
+ using namespace Qt::StringLiterals;
+ 
++constexpr int daemonRestartCode = 64;
++
++Optional<PinState> pinStateFromString(const QString &str)
++{
++    if (str == QLatin1String("unspecified")) {
++        return PinState::Unspecified;
++    } else if (str == QLatin1String("alwayslocal")) {
++        return PinState::AlwaysLocal;
++    } else if (str == QLatin1String("onlineonly")) {
++        return PinState::OnlineOnly;
++    }
++    return {};
++}
++
+ static void nullMessageHandler(QtMsgType, const QMessageLogContext &, const QString &)
+ {
+ }
+@@ -81,6 +95,11 @@ struct CmdOptions
+     int restartTimes = 0;
+     int downlimit = 0;
+     int uplimit = 0;
++    Vfs::Mode vfsMode = Vfs::Off;
++    PinState rootPinState = PinState::Unspecified;
++    bool downloadOnly = false;
++    bool vfsDaemon = false;
++    int syncIntervalSeconds = 30;
+ };
+ 
+ // we can't use csync_set_userdata because the SyncEngine sets it already.
+@@ -195,6 +214,11 @@ void help()
+     std::cout << "  --logdebug             More verbose logging" << std::endl;
+     std::cout << "  --path                 Path to a folder on a remote server" << std::endl;
+     std::cout << "  --confdir [dir]        Use the given configuration directory" << std::endl;
++    std::cout << "  --vfs [mode]           Virtual files mode: off, suffix, wincfapi, xattr, fuse" << std::endl;
++    std::cout << "  --root-pin [state]     Pin state applied to the sync root: unspecified, alwayslocal, onlineonly" << std::endl;
++    std::cout << "  --download-only        Suppress every upload, remote rename and remote delete" << std::endl;
++    std::cout << "  --vfs-daemon           Keep serving virtual files and synchronize periodically" << std::endl;
++    std::cout << "  --sync-interval [n]    Seconds between daemon synchronization runs" << std::endl;
+     std::cout << "" << std::endl;
+     std::cout << "Account provisioning options (non-interactive setup):" << std::endl;
+     std::cout << "  --userid [user]        The user ID to configure" << std::endl;
+@@ -303,6 +327,34 @@ CommandMode parseOptions(const QStringList &app_args, CmdOptions *options)
+             options->remotePath = it.next();
+         } else if (option == u"--confdir"_s && it.hasNext() && !it.peekNext().startsWith(u"--"_s)) {
+             options->config_directory = it.next();
++        } else if (option == u"--vfs"_s && it.hasNext() && !it.peekNext().startsWith(u"-"_s)) {
++            const QString modeName = it.next();
++            const auto mode = Vfs::modeFromString(modeName);
++            if (!mode) {
++                std::cerr << "Unknown virtual files mode '" << qPrintable(modeName) << "'." << std::endl;
++                exit(1);
++            }
++            options->vfsMode = *mode;
++        } else if (option == u"--download-only"_s) {
++            options->downloadOnly = true;
++        } else if (option == u"--root-pin"_s && it.hasNext() && !it.peekNext().startsWith(u"-"_s)) {
++            const QString pinStateName = it.next();
++            const auto pinState = pinStateFromString(pinStateName);
++            if (!pinState) {
++                std::cerr << "Unknown pin state '" << qPrintable(pinStateName) << "'." << std::endl;
++                exit(1);
++            }
++            options->rootPinState = *pinState;
++        } else if (option == u"--vfs-daemon"_s) {
++            options->vfsDaemon = true;
++        } else if (option == u"--sync-interval"_s && it.hasNext() && !it.peekNext().startsWith(u"-"_s)) {
++            bool valid = false;
++            const auto interval = it.next().toInt(&valid);
++            if (!valid || interval < 1 || interval > 86400) {
++                std::cerr << "The sync interval is not between 1 and 86400 seconds." << std::endl;
++                exit(1);
++            }
++            options->syncIntervalSeconds = interval;
+         } else {
+             QString errorMessage;
+             if (!AccountSetupCommandLineManager::instance()->parseCommandlineOption(option, it, errorMessage)) {
+@@ -667,11 +719,85 @@ restart_sync:
+     syncOptions.fillFromEnvironmentVariables();
+     syncOptions.verifyChunkSizes();
+     syncOptions.setIsCmd(true);
++
++    QSharedPointer<Vfs> vfs(createVfsFromPlugin(options.vfsMode).release());
++    if (!vfs) {
++        qCritical() << "Could not create a virtual files instance for mode" << Vfs::modeToString(options.vfsMode);
++        return EXIT_FAILURE;
++    }
++    vfs->setDemandDrivenDiscoveryEnabled(options.vfsDaemon && options.vfsMode == Vfs::Fuse);
++    syncOptions._vfs = vfs;
++
+     SyncEngine engine(account, options.source_dir, syncOptions, folder, &db);
+     engine.setIgnoreHiddenFiles(options.ignoreHiddenFiles);
+     engine.setNetworkLimits(options.uplimit, options.downlimit);
++
++    if (options.downloadOnly) {
++        QObject::connect(&engine, &SyncEngine::aboutToPropagate, [](SyncFileItemVector &items) {
++            for (const auto &item : items) {
++                const auto writesToServer = item->_direction == SyncFileItem::Up
++                    || item->_instruction == CSYNC_INSTRUCTION_CONFLICT
++                    || item->_instruction == CSYNC_INSTRUCTION_CASE_CLASH_CONFLICT;
++                if (writesToServer) {
++                    qWarning() << "download-only: suppressing" << item->_instruction << "on" << item->_file;
++                    item->_instruction = CSYNC_INSTRUCTION_IGNORE;
++                }
++            }
++        });
++    }
++
++    VfsSetupParams vfsParams;
++    vfsParams.filesystemPath = options.source_dir;
++    vfsParams.remotePath = Utility::trailingSlashPath(folder);
++    vfsParams.account = account;
++    vfsParams.journal = &db;
++    vfsParams.providerName = Theme::instance()->appNameGUI();
++    vfsParams.providerVersion = Theme::instance()->version();
++    QObject::connect(&engine.syncFileStatusTracker(), &SyncFileStatusTracker::fileStatusChanged,
++        vfs.data(), &Vfs::fileStatusChanged);
++    vfs->start(vfsParams);
++
++    if (options.vfsMode != Vfs::Off) {
++        const auto rootPin = db.internalPinStates().rawForPath(QByteArray());
++        if (!rootPin) {
++            qCritical() << "Could not read the virtual-files root pin state";
++            return EXIT_FAILURE;
++        }
++        if (*rootPin == PinState::Inherited) {
++            db.internalPinStates().setForPath(QByteArray(), options.rootPinState);
++        }
++    }
++
++    bool syncFinished = false;
++    bool syncRequested = false;
++    QTimer daemonTimer;
++    daemonTimer.setSingleShot(true);
++    QObject::connect(&daemonTimer, &QTimer::timeout, &app, [&app] {
++        app.exit(daemonRestartCode);
++    });
++    QObject::connect(vfs.data(), &Vfs::syncRequested, &app, [&](const QString &) {
++        syncRequested = true;
++        if (syncFinished) {
++            daemonTimer.start(0);
++        }
++    });
++
+     QObject::connect(&engine, &SyncEngine::finished,
+-        [&app](bool result) { app.exit(result ? EXIT_SUCCESS : EXIT_FAILURE); });
++        [&](bool result) {
++            if (result) {
++                vfs->initialDiscoveryFinished();
++            }
++            if (result && options.vfsDaemon) {
++                syncFinished = true;
++                qInfo() << "Sync finished; serving virtual files";
++                daemonTimer.start(
++                    syncRequested || engine.isAnotherSyncNeeded() != NoFollowUpSync
++                        ? 0
++                        : options.syncIntervalSeconds * 1000);
++                return;
++            }
++            app.exit(result ? EXIT_SUCCESS : EXIT_FAILURE);
++        });
+     QObject::connect(&engine, &SyncEngine::transmissionProgress, &cmd, &Cmd::transmissionProgressSlot);
+     QObject::connect(&engine, &SyncEngine::syncError,
+         [](const QString &error) { qWarning() << "Sync error:" << error; });
+@@ -711,6 +837,13 @@ restart_sync:
+ 
+     int resultCode = app.exec();
+ 
++    vfs->stop();
++
++    if (options.vfsDaemon && resultCode == daemonRestartCode) {
++        restartCount = 0;
++        goto restart_sync;
++    }
++
+     if (engine.isAnotherSyncNeeded() != NoFollowUpSync) {
+         if (restartCount < options.restartTimes) {
+             restartCount++;
+diff --git a/src/common/syncjournaldb.cpp b/src/common/syncjournaldb.cpp
+index acd9771..7c7fee2 100644
+--- a/src/common/syncjournaldb.cpp
++++ b/src/common/syncjournaldb.cpp
+@@ -2536,8 +2536,8 @@ void SyncJournalDb::schedulePathForRemoteDiscovery(const QByteArray &fileName)
+ 
+     SqlQuery query(_db);
+     // This query will match entries for which the path is a prefix of fileName
+-    // Note: CSYNC_FTW_TYPE_DIR == 2
+-    query.prepare("UPDATE metadata SET md5='_invalid_' WHERE " IS_PREFIX_PATH_OR_EQUAL("path", "?1") " AND type == 2;");
++    static_assert(ItemTypeDirectory == 2 && ItemTypeVirtualDirectory == 7, "");
++    query.prepare("UPDATE metadata SET md5='_invalid_' WHERE " IS_PREFIX_PATH_OR_EQUAL("path", "?1") " AND type IN (2, 7);");
+     query.bindValue(1, argument);
+ 
+     if (!query.exec()) {
+@@ -2983,9 +2983,9 @@ void SyncJournalDb::markVirtualFileForDownloadRecursively(const QByteArray &path
+ 
+     // We also must make sure we do not read the files from the database (same logic as in schedulePathForRemoteDiscovery)
+     // This includes all the parents up to the root, but also all the directory within the selected dir.
+-    static_assert(ItemTypeDirectory == 2, "");
++    static_assert(ItemTypeDirectory == 2 && ItemTypeVirtualDirectory == 7, "");
+     query.prepare("UPDATE metadata SET md5='_invalid_' WHERE "
+-                  "(" IS_PREFIX_PATH_OF("?1", "path") " OR ?1 == '' OR " IS_PREFIX_PATH_OR_EQUAL("path", "?1") ") AND type == 2;");
++                  "(" IS_PREFIX_PATH_OF("?1", "path") " OR ?1 == '' OR " IS_PREFIX_PATH_OR_EQUAL("path", "?1") ") AND type IN (2, 7);");
+     query.bindValue(1, path);
+ 
+     if (!query.exec()) {
+diff --git a/src/common/vfs.cpp b/src/common/vfs.cpp
+index fab934f..ad3b798 100644
+--- a/src/common/vfs.cpp
++++ b/src/common/vfs.cpp
+@@ -37,6 +37,8 @@ QString Vfs::modeToString(Mode mode)
+         return QStringLiteral("wincfapi");
+     case XAttr:
+         return QStringLiteral("xattr");
++    case Fuse:
++        return QStringLiteral("fuse");
+     }
+     return QStringLiteral("off");
+ }
+@@ -50,6 +52,10 @@ Optional<Vfs::Mode> Vfs::modeFromString(const QString &str)
+         return WithSuffix;
+     } else if (str == QLatin1String("wincfapi")) {
+         return WindowsCfApi;
++    } else if (str == QLatin1String("xattr")) {
++        return XAttr;
++    } else if (str == QLatin1String("fuse")) {
++        return Fuse;
+     }
+     return {};
+ }
+@@ -148,6 +154,9 @@ static QString modeToPluginName(Vfs::Mode mode)
+     if (mode == Vfs::XAttr) {
+         return QStringLiteral("xattr");
+     }
++    if (mode == Vfs::Fuse) {
++        return QStringLiteral("fuse");
++    }
+     return QString();
+ }
+ 
+@@ -203,6 +212,10 @@ Vfs::Mode OCC::bestAvailableVfsMode()
+         return Vfs::WindowsCfApi;
+     }
+ 
++    if (isVfsPluginAvailable(Vfs::Fuse)) {
++        return Vfs::Fuse;
++    }
++
+     if (isVfsPluginAvailable(Vfs::WithSuffix)) {
+         return Vfs::WithSuffix;
+     }
+diff --git a/src/common/vfs.h b/src/common/vfs.h
+index b9f6a2b..6e0f4c4 100644
+--- a/src/common/vfs.h
++++ b/src/common/vfs.h
+@@ -116,6 +116,7 @@ public:
+         WithSuffix,
+         WindowsCfApi,
+         XAttr,
++        Fuse,
+     };
+     Q_ENUM(Mode)
+     enum class ConvertToPlaceholderResult {
+@@ -167,6 +168,8 @@ public:
+     /// Access to the parameters the instance was start()ed with.
+     [[nodiscard]] const VfsSetupParams &params() const { return _setupParams; }
+ 
++    [[nodiscard]] virtual QString userFacingPath() const { return _setupParams.filesystemPath; }
++
+ 
+     /** Initializes interaction with the VFS provider.
+      *
+@@ -194,6 +197,10 @@ public:
+      */
+     [[nodiscard]] virtual bool isHydrating() const = 0;
+ 
++    virtual void setDemandDrivenDiscoveryEnabled(bool) {}
++    [[nodiscard]] virtual bool demandDrivenDiscoveryEnabled() const { return false; }
++    virtual void initialDiscoveryFinished() {}
++
+     /** Update placeholder metadata during discovery.
+      *
+      * If the remote metadata changes, the local placeholder's metadata should possibly
+@@ -296,6 +303,7 @@ public Q_SLOTS:
+     virtual void fileStatusChanged(const QString &systemFileName, OCC::SyncFileStatus fileStatus) = 0;
+ 
+ Q_SIGNALS:
++    void syncRequested(const QString &folderPath);
+     /// Emitted when a user-initiated hydration starts
+     void beginHydrating();
+     /// Emitted when the hydration ends
+diff --git a/src/gui/folder.cpp b/src/gui/folder.cpp
+index b0eac7d..09eb008 100644
+--- a/src/gui/folder.cpp
++++ b/src/gui/folder.cpp
+@@ -284,9 +284,15 @@ QString Folder::path() const
+     return _canonicalLocalPath;
+ }
+ 
++QString Folder::userFacingPath() const
++{
++    const auto vfsPath = _vfs->userFacingPath();
++    return vfsPath.isEmpty() ? path() : vfsPath;
++}
++
+ QString Folder::shortGuiLocalPath() const
+ {
+-    QString p = _definition.localPath;
++    QString p = userFacingPath();
+     const auto home = Utility::trailingSlashPath(QDir::homePath());
+ 
+     if (p.startsWith(home)) {
+@@ -597,6 +603,11 @@ void Folder::startVfs()
+     connect(_vfs.data(), &Vfs::beginHydrating, this, &Folder::slotHydrationStarts);
+     connect(_vfs.data(), &Vfs::doneHydrating, this, &Folder::slotHydrationDone);
+     connect(_vfs.data(), &Vfs::failureHydrating, this, &Folder::slotHydrationFailed);
++    _vfs->setDemandDrivenDiscoveryEnabled(_vfs->mode() == Vfs::Fuse);
++    connect(_vfs.data(), &Vfs::syncRequested, this, [this](const QString &relativePath) {
++        schedulePathForLocalDiscovery(relativePath);
++        scheduleThisFolderSoon();
++    });
+ 
+     connect(&_engine->syncFileStatusTracker(), &SyncFileStatusTracker::fileStatusChanged,
+             _vfs.data(), &Vfs::fileStatusChanged);
+@@ -1356,6 +1367,9 @@ void Folder::slotSyncFinished(bool success)
+         _syncResult.setStatus(SyncResult::Success);
+     }
+ 
++    if (success) {
++        _vfs->initialDiscoveryFinished();
++    }
+     // Count the number of syncs that have failed in a row.
+     if (_syncResult.status() == SyncResult::Success
+         || _syncResult.status() == SyncResult::Problem) {
+diff --git a/src/gui/folder.h b/src/gui/folder.h
+index 51178a5..b21ec6f 100644
+--- a/src/gui/folder.h
++++ b/src/gui/folder.h
+@@ -156,6 +156,8 @@ public:
+      */
+     [[nodiscard]] QString path() const;
+ 
++    [[nodiscard]] QString userFacingPath() const;
++
+     /**
+      * cleaned canonical folder path, like path() but never ends with a /
+      *
+diff --git a/src/gui/folderstatusmodel.cpp b/src/gui/folderstatusmodel.cpp
+index fb82fe4..eb8d844 100644
+--- a/src/gui/folderstatusmodel.cpp
++++ b/src/gui/folderstatusmodel.cpp
+@@ -200,7 +200,7 @@ QVariant FolderStatusModel::data(const QModelIndex &index, int role) const
+         case FolderStatusDelegate::FolderPathRole:
+         {
+             if (const auto folder = subfolderInfo._folder) {
+-                return {folder->path() + subfolderInfo._path};
++                return {folder->userFacingPath() + subfolderInfo._path};
+             }
+             return {};
+         }
+diff --git a/src/gui/folderwizard.cpp b/src/gui/folderwizard.cpp
+index 40a2080..f726f23 100644
+--- a/src/gui/folderwizard.cpp
++++ b/src/gui/folderwizard.cpp
+@@ -641,7 +641,7 @@ void FolderWizardSelectiveSync::initializePage()
+ bool FolderWizardSelectiveSync::validatePage()
+ {
+     const auto mode = bestAvailableVfsMode();
+-    const bool useVirtualFiles = (mode == Vfs::WindowsCfApi) && (_virtualFilesCheckBox && _virtualFilesCheckBox->isChecked());
++    const bool useVirtualFiles = mode != Vfs::Off && _virtualFilesCheckBox && _virtualFilesCheckBox->isChecked();
+     if (useVirtualFiles) {
+         const auto availability = Vfs::checkAvailability(wizard()->field(QStringLiteral("sourceFolder")).toString(), mode);
+         if (!availability) {
+diff --git a/src/gui/guiutility.cpp b/src/gui/guiutility.cpp
+index f1bb117..1f72447 100644
+--- a/src/gui/guiutility.cpp
++++ b/src/gui/guiutility.cpp
+@@ -146,6 +146,26 @@ void Utility::askExperimentalVirtualFilesFeature(QWidget *receiver, const std::f
+         acceptButton = msgBox->addButton(QCoreApplication::translate("utility", "Enable experimental placeholder mode"), QMessageBox::AcceptRole);
+         msgBox->addButton(QCoreApplication::translate("utility", "Stay safe"), QMessageBox::RejectRole);
+         break;
++    case Vfs::Fuse:
++        msgBox = new QMessageBox(
++            QMessageBox::Warning,
++            QCoreApplication::translate("utility", "Enable experimental feature?"),
++            QCoreApplication::translate("utility",
++                "When the \"virtual files\" mode is enabled all files remain visible, but their contents are downloaded only when opened or made available locally. "
++                "Files can be returned to online-only storage through their context menu."
++                "\n\n"
++                "The virtual files mode is mutually exclusive with selective sync. "
++                "Currently unselected folders will be translated to online-only folders "
++                "and your selective sync settings will be reset."
++                "\n\n"
++                "Switching to this mode will abort any currently running synchronization."
++                "\n\n"
++                "This is a new, experimental mode. If you decide to use it, please report any "
++                "issues that come up."),
++            QMessageBox::NoButton, receiver);
++        acceptButton = msgBox->addButton(QCoreApplication::translate("utility", "Enable experimental virtual files mode"), QMessageBox::AcceptRole);
++        msgBox->addButton(QCoreApplication::translate("utility", "Stay safe"), QMessageBox::RejectRole);
++        break;
+     case Vfs::XAttr:
+     case Vfs::Off:
+         Q_UNREACHABLE();
+diff --git a/src/gui/owncloudgui.cpp b/src/gui/owncloudgui.cpp
+index ddbc4db..a5683eb 100644
+--- a/src/gui/owncloudgui.cpp
++++ b/src/gui/owncloudgui.cpp
+@@ -556,12 +556,12 @@ void ownCloudGui::slotFolderOpenAction(const QString &alias)
+ {
+     Folder *f = FolderMan::instance()->folder(alias);
+     if (f) {
+-        qCInfo(lcApplication) << "opening local url " << f->path();
+-        QUrl url = QUrl::fromLocalFile(f->path());
++        qCInfo(lcApplication) << "opening local url " << f->userFacingPath();
++        QUrl url = QUrl::fromLocalFile(f->userFacingPath());
+ 
+ #ifdef Q_OS_WIN
+         // work around a bug in QDesktopServices on Win32, see i-net
+-        QString filePath = f->path();
++        QString filePath = f->userFacingPath();
+ 
+         if (filePath.startsWith(QLatin1String("\\\\")) || filePath.startsWith(QLatin1String("//")))
+             url = QUrl::fromLocalFile(QDir::toNativeSeparators(filePath));
+diff --git a/src/gui/socketapi/socketapi.cpp b/src/gui/socketapi/socketapi.cpp
+index e1bebea..50f0fd3 100644
+--- a/src/gui/socketapi/socketapi.cpp
++++ b/src/gui/socketapi/socketapi.cpp
+@@ -100,6 +100,32 @@ QStringList split(const QString &data)
+     return data.split(RecordSeparator());
+ }
+ 
++OCC::Folder *folderForSocketPath(const QString &path, QString *rootPath = nullptr)
++{
++    const auto cleanedPath = QDir::cleanPath(path);
++    const auto containsPath = [&cleanedPath](const QString &candidate) {
++        const auto cleanedCandidate = QDir::cleanPath(candidate);
++        return cleanedPath == cleanedCandidate || cleanedPath.startsWith(cleanedCandidate + QLatin1Char('/'));
++    };
++
++    if (auto *folder = OCC::FolderMan::instance()->folderForPath(cleanedPath)) {
++        if (rootPath) {
++            *rootPath = folder->cleanPath();
++        }
++        return folder;
++    }
++
++    for (auto *folder : OCC::FolderMan::instance()->map()) {
++        if (containsPath(folder->userFacingPath())) {
++            if (rootPath) {
++                *rootPath = QDir::cleanPath(folder->userFacingPath());
++            }
++            return folder;
++        }
++    }
++    return nullptr;
++}
++
+ #if GUI_TESTING
+ 
+ using namespace OCC;
+@@ -342,7 +368,7 @@ void SocketApi::slotNewConnection()
+     _listeners.insert(socket, listener);
+     for (Folder *f : FolderMan::instance()->map()) {
+         if (f->canSync()) {
+-            QString message = buildRegisterPathMessage(removeTrailingSlash(f->path()));
++            QString message = buildRegisterPathMessage(removeTrailingSlash(f->userFacingPath()));
+             qCDebug(lcSocketApi) << "Trying to send SocketAPI Register Path Message -->" << message << "to" << listener->socket;
+             listener->sendMessage(message);
+         }
+@@ -451,7 +477,7 @@ void SocketApi::slotRegisterPath(const QString &alias)
+ 
+     Folder *f = FolderMan::instance()->folder(alias);
+     if (f) {
+-        const QString path = removeTrailingSlash(f->path());
++        const QString path = removeTrailingSlash(f->userFacingPath());
+         const QString message = buildRegisterPathMessage(path);
+         for (const auto &listener : std::as_const(_listeners)) {
+             qCInfo(lcSocketApi) << "Trying to send SocketAPI Register Path Message -->" << message << "to" << listener->socket;
+@@ -488,7 +514,7 @@ void SocketApi::slotUnregisterPath(const QString &alias)
+ 
+     auto folder = FolderMan::instance()->folder(alias);
+     if (folder) {
+-        const QString path = removeTrailingSlash(folder->path());
++        const QString path = removeTrailingSlash(folder->userFacingPath());
+         broadcastMessage(buildMessage(QLatin1String("UNREGISTER_PATH"), path, QString()));
+ 
+ #if defined(Q_OS_MACOS)
+@@ -527,7 +553,7 @@ void SocketApi::slotUpdateFolderView(Folder *f)
+             || f->syncResult().status() == SyncResult::Problem
+             || f->syncResult().status() == SyncResult::Error
+             || f->syncResult().status() == SyncResult::SetupError) {
+-            QString rootPath = removeTrailingSlash(f->path());
++            QString rootPath = removeTrailingSlash(f->userFacingPath());
+             broadcastStatusPushMessage(rootPath, f->syncEngine().syncFileStatusTracker().fileStatus(""));
+ 
+             broadcastMessage(buildMessage(QLatin1String("UPDATE_VIEW"), rootPath));
+@@ -691,9 +717,13 @@ void SocketApi::processFileActionsRequest(const QString &localFile)
+ 
+ void SocketApi::broadcastStatusPushMessage(const QString &systemPath, SyncFileStatus fileStatus)
+ {
+-    QString msg = buildMessage(QLatin1String("STATUS"), systemPath, fileStatus.toSocketAPIString());
+-    Q_ASSERT(!systemPath.endsWith('/'));
+-    uint directoryHash = qHash(systemPath.left(systemPath.lastIndexOf('/')));
++    auto userFacingPath = systemPath;
++    if (auto *folder = FolderMan::instance()->folderForPath(systemPath)) {
++        userFacingPath = QDir::cleanPath(folder->userFacingPath()) + systemPath.mid(folder->cleanPath().size());
++    }
++    QString msg = buildMessage(QLatin1String("STATUS"), userFacingPath, fileStatus.toSocketAPIString());
++    Q_ASSERT(!userFacingPath.endsWith('/'));
++    uint directoryHash = qHash(userFacingPath.left(userFacingPath.lastIndexOf('/')));
+     for (const auto &listener : std::as_const(_listeners)) {
+         listener->sendMessageIfDirectoryMonitored(msg, directoryHash);
+     }
+@@ -1335,12 +1365,13 @@ SocketApi::FileData SocketApi::FileData::get(const QString &localFile)
+         data.localPath.chop(1);
+     }
+ 
+-    data.folder = FolderMan::instance()->folderForPath(data.localPath);
++    QString rootPath;
++    data.folder = folderForSocketPath(data.localPath, &rootPath);
+     if (!data.folder) {
+         return data;
+     }
+ 
+-    data.folderRelativePath = data.localPath.mid(data.folder->cleanPath().length() + 1);
++    data.folderRelativePath = data.localPath.mid(rootPath.length() + 1);
+     data.serverRelativePath = QDir(data.folder->remotePath()).filePath(data.folderRelativePath);
+     QString virtualFileExt = QStringLiteral(APPLICATION_DOTVIRTUALFILE_SUFFIX);
+     if (data.serverRelativePath.endsWith(virtualFileExt)) {
+@@ -1402,7 +1433,7 @@ void SocketApi::command_GET_MENU_ITEMS(const QString &argument, OCC::SocketListe
+     // syncFolder will be null if files are in different folders.
+     Folder *syncFolder = nullptr;
+     for (const auto &file : files) {
+-        auto folder = FolderMan::instance()->folderForPath(file);
++        auto folder = folderForSocketPath(file);
+         if (folder != syncFolder) {
+             if (!syncFolder) {
+                 syncFolder = folder;
+diff --git a/src/gui/tray/usermodel.cpp b/src/gui/tray/usermodel.cpp
+index af2904f..87f3a1c 100644
+--- a/src/gui/tray/usermodel.cpp
++++ b/src/gui/tray/usermodel.cpp
+@@ -1692,7 +1692,7 @@ void User::refreshAccountAlert()
+ void User::openLocalFolder() const
+ {
+     if (const auto folder = getFolder()) {
+-        QDesktopServices::openUrl(QUrl::fromLocalFile(folder->path()));
++        QDesktopServices::openUrl(QUrl::fromLocalFile(folder->userFacingPath()));
+     }
+ }
+ 
+@@ -1739,7 +1739,7 @@ void User::openFolderLocallyOrInBrowser(const QString &fullRemotePath)
+     if (folder->journalDb()->getFileRecord(fullRemotePathToPathInDb, &rec) && rec.isValid()) {
+         // found folder locally, going to open
+         qCInfo(lcActivity) << "Opening locally a folder" << fullRemotePath;
+-        QDesktopServices::openUrl(QUrl::fromLocalFile(folder->path() + rec.path()));
++        QDesktopServices::openUrl(QUrl::fromLocalFile(folder->userFacingPath() + rec.path()));
+         return;
+     }
+ 
+diff --git a/src/libsync/discovery.cpp b/src/libsync/discovery.cpp
+index b9a1a44..89bf9fe 100644
+--- a/src/libsync/discovery.cpp
++++ b/src/libsync/discovery.cpp
+@@ -688,7 +688,7 @@ void ProcessDirectoryJob::postProcessServerNew(const SyncFileItemPtr &item,
+     if (item->isDirectory()) {
+         // Turn new remote folders into virtual folders if the option is enabled.
+         if (!localEntry.isValid() &&
+-            opts._vfs->mode() == Vfs::WindowsCfApi &&
++            (opts._vfs->mode() == Vfs::WindowsCfApi || opts._vfs->demandDrivenDiscoveryEnabled()) &&
+             _pinState != PinState::AlwaysLocal &&
+             !FileSystem::isExcludeFile(item->_file) &&
+             !item->isEncrypted()) {
+@@ -746,7 +746,11 @@ void ProcessDirectoryJob::processFileAnalyzeRemoteInfo(const SyncFileItemPtr &it
+     item->_isShared = serverEntry.remotePerm.hasPermission(RemotePermissions::IsShared) || serverEntry.sharedByMe;
+     item->_sharedByMe = serverEntry.sharedByMe;
+     item->_lastShareStateFetchedTimestamp = QDateTime::currentMSecsSinceEpoch();
+-    item->_type = serverEntry.isDirectory ? ItemTypeDirectory : ItemTypeFile;
++    const auto remainsUndiscovered = dbEntry._type == ItemTypeVirtualDirectory
++        && dbEntry._etag != QByteArrayLiteral("_invalid_")
++        && _pinState != PinState::AlwaysLocal
++        && _discoveryData->_syncOptions._vfs->demandDrivenDiscoveryEnabled();
++    item->_type = remainsUndiscovered ? ItemTypeVirtualDirectory : serverEntry.isDirectory ? ItemTypeDirectory : ItemTypeFile;
+     item->_etag = serverEntry.etag;
+     item->_directDownloadUrl = serverEntry.directDownloadUrl;
+     item->_directDownloadCookies = serverEntry.directDownloadCookies;
+diff --git a/src/libsync/theme.cpp b/src/libsync/theme.cpp
+index 122cb6f..49096c3 100644
+--- a/src/libsync/theme.cpp
++++ b/src/libsync/theme.cpp
+@@ -1051,7 +1051,7 @@ QPixmap Theme::createColorAwarePixmap(const QString &name)
+ bool Theme::showVirtualFilesOption() const
+ {
+     const auto vfsMode = bestAvailableVfsMode();
+-    return ConfigFile().showExperimentalOptions() || vfsMode == Vfs::WindowsCfApi;
++    return ConfigFile().showExperimentalOptions() || vfsMode == Vfs::WindowsCfApi || vfsMode == Vfs::Fuse;
+ }
+ 
+ bool Theme::enforceVirtualFilesSyncFolder() const
+diff --git a/src/libsync/vfs/CMakeLists.txt b/src/libsync/vfs/CMakeLists.txt
+index de48e10..4dd65bf 100644
+--- a/src/libsync/vfs/CMakeLists.txt
++++ b/src/libsync/vfs/CMakeLists.txt
+@@ -5,7 +5,7 @@
+ # that create directories for the build.
+ #file(GLOB VIRTUAL_FILE_SYSTEM_PLUGINS RELATIVE ${CMAKE_CURRENT_LIST_DIR} "*")
+ 
+-list(APPEND VIRTUAL_FILE_SYSTEM_PLUGINS "suffix" "cfapi" "xattr")
++list(APPEND VIRTUAL_FILE_SYSTEM_PLUGINS "suffix" "cfapi" "xattr" "fuse")
+ 
+ message("list of plugins ${VIRTUAL_FILE_SYSTEM_PLUGINS}")
+ 
+diff --git a/src/libsync/vfs/cfapi/hydrationjob.cpp b/src/libsync/vfs/cfapi/hydrationjob.cpp
+index dc03117..8730b8b 100644
+--- a/src/libsync/vfs/cfapi/hydrationjob.cpp
++++ b/src/libsync/vfs/cfapi/hydrationjob.cpp
+@@ -7,7 +7,7 @@
+ 
+ #include "common/syncjournaldb.h"
+ #include "propagatedownload.h"
+-#include "vfs/cfapi/vfs_cfapi.h"
++#include "common/vfs.h"
+ #include <clientsideencryptionjobs.h>
+ #include "encryptedfoldermetadatahandler.h"
+ #include "foldermetadata.h"
+@@ -241,7 +241,7 @@ void OCC::HydrationJob::onNewConnection()
+     }
+ }
+ 
+-void OCC::HydrationJob::finalize(OCC::VfsCfApi *vfs)
++void OCC::HydrationJob::finalize(OCC::Vfs *vfs)
+ {
+     // Mark the file as hydrated in the sync journal
+     SyncJournalFileRecord record;
+diff --git a/src/libsync/vfs/cfapi/hydrationjob.h b/src/libsync/vfs/cfapi/hydrationjob.h
+index 83232d2..61daedb 100644
+--- a/src/libsync/vfs/cfapi/hydrationjob.h
++++ b/src/libsync/vfs/cfapi/hydrationjob.h
+@@ -15,7 +15,7 @@ namespace OCC {
+ class EncryptedFolderMetadataHandler;
+ class GETFileJob;
+ class SyncJournalDb;
+-class VfsCfApi;
++class Vfs;
+ 
+ namespace EncryptionHelper {
+     class StreamingDecryptor;
+@@ -71,7 +71,7 @@ public:
+ 
+     void start();
+     void cancel();
+-    void finalize(OCC::VfsCfApi *vfs);
++    void finalize(OCC::Vfs *vfs);
+ 
+ Q_SIGNALS:
+     void finished(HydrationJob *job);
+diff --git a/test/CMakeLists.txt b/test/CMakeLists.txt
+index 16ddc58..052cffd 100644
+--- a/test/CMakeLists.txt
++++ b/test/CMakeLists.txt
+@@ -184,6 +184,7 @@ if (WIN32)
+     target_sources(CfApiShellExtensionsIPCTest PRIVATE "${CMAKE_SOURCE_DIR}/src/libsync/vfs/cfapi/shellext/thumbnailprovideripc.cpp" "${CMAKE_SOURCE_DIR}/src/libsync/vfs/cfapi/shellext/customstateprovideripc.cpp" "${CMAKE_SOURCE_DIR}/src/libsync/vfs/cfapi/shellext/ipccommon.cpp")
+ elseif(LINUX) # elseif(LINUX OR APPLE)
+     nextcloud_add_test(SyncXAttr)
++    nextcloud_add_test(SyncFuse)
+ endif()
+ 
+ nextcloud_add_test(LongPath)
+diff --git a/test/nextcloud_add_test.cmake b/test/nextcloud_add_test.cmake
+index 5a3d4d1..7c0b73d 100644
+--- a/test/nextcloud_add_test.cmake
++++ b/test/nextcloud_add_test.cmake
+@@ -27,7 +27,7 @@ macro(nextcloud_build_test test_class)
+     if (WIN32)
+         target_link_libraries(${OWNCLOUD_TEST_CLASS}Test PRIVATE nextcloudsync_vfs_cfapi)
+     elseif (LINUX)
+-        target_link_libraries(${OWNCLOUD_TEST_CLASS}Test PRIVATE nextcloudsync_vfs_xattr)
++        target_link_libraries(${OWNCLOUD_TEST_CLASS}Test PRIVATE nextcloudsync_vfs_xattr nextcloudsync_vfs_fuse)
+     endif()
+ 
+     IF(BUILD_UPDATER)
+@@ -73,6 +73,7 @@ macro(nextcloud_add_test test_class)
+     if (LINUX)
+         target_link_libraries(${OWNCLOUD_TEST_CLASS}Test PRIVATE
+             nextcloudsync_vfs_xattr
++            nextcloudsync_vfs_fuse
+         )
+     endif()
+ 

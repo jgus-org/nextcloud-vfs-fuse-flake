@@ -2,18 +2,28 @@
   description = "nextcloud-client carrying an experimental FUSE-backed virtual files plugin (Vfs::Fuse), and the nextcloud-vfs-fused daemon presenting that plugin's backing store with the placeholders' remote sizes.";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    # Pinned to a fixed rev: the Vfs::Fuse patch set is coupled to the
+    # nextcloud-client version this rev ships (see pin.nix). Following a branch
+    # would let `nix flake update` drift nextcloud out from under the patch and
+    # trip the version assert below.
+    nixpkgs.url = "github:NixOS/nixpkgs/55ba7f49ef2962b42cbd126522b7df5f95037679";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+    }:
     let
       pin = import ./pin.nix;
     in
     {
       nixosModules.default = import ./nixos-module.nix { inherit self; };
     }
-    // flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
+    // flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (
+      system:
       let
         pkgs = import nixpkgs { inherit system; };
         inherit (pkgs) lib;
@@ -37,41 +47,10 @@
               install -Dm644 ${./client/testsyncfuse.cpp} test/testsyncfuse.cpp
               install -Dm644 ${./client/nextcloudctl.cpp} src/cmd/nextcloudctl.cpp
 
-              patch -p1 < ${./client/cmd-vfs.patch}
-              patch -p1 < ${./client/gui-vfs.patch}
-              patch -p1 < ${./client/control-vfs.patch}
-              patch -p1 < ${./client/demand-discovery.patch}
+              patch -p1 < ${./client/nextcloud-vfs-fuse.patch}
 
-              substituteInPlace src/cmd/CMakeLists.txt \
-                --replace-fail $'  target_link_libraries(nextcloudcmd cmdCore)\n' $'  target_link_libraries(nextcloudcmd cmdCore)\n\n  add_executable(nextcloudctl nextcloudctl.cpp)\n  ecm_mark_nongui_executable(nextcloudctl)\n  set_target_properties(nextcloudctl PROPERTIES RUNTIME_OUTPUT_NAME "''${APPLICATION_EXECUTABLE}ctl")\n  target_link_libraries(nextcloudctl cmdCore)\n' \
-                --replace-fail 'install(TARGETS nextcloudcmd' 'install(TARGETS nextcloudcmd nextcloudctl'
-
-              substituteInPlace src/common/vfs.h \
-                --replace-fail $'        XAttr,\n    };' $'        XAttr,\n        Fuse,\n    };'
-
-              substituteInPlace src/common/vfs.cpp \
-                --replace-fail $'    case XAttr:\n        return QStringLiteral("xattr");\n    }' $'    case XAttr:\n        return QStringLiteral("xattr");\n    case Fuse:\n        return QStringLiteral("fuse");\n    }' \
-                --replace-fail $'    } else if (str == QLatin1String("wincfapi")) {\n        return WindowsCfApi;\n    }' $'    } else if (str == QLatin1String("wincfapi")) {\n        return WindowsCfApi;\n    } else if (str == QLatin1String("xattr")) {\n        return XAttr;\n    } else if (str == QLatin1String("fuse")) {\n        return Fuse;\n    }' \
-                --replace-fail $'    if (mode == Vfs::XAttr)\n        return QStringLiteral("xattr");\n    return QString();' $'    if (mode == Vfs::XAttr)\n        return QStringLiteral("xattr");\n    if (mode == Vfs::Fuse)\n        return QStringLiteral("fuse");\n    return QString();'
-
-              substituteInPlace src/libsync/vfs/CMakeLists.txt \
-                --replace-fail '"suffix" "cfapi" "xattr")' '"suffix" "cfapi" "xattr" "fuse")'
-
-              substituteInPlace src/libsync/vfs/cfapi/hydrationjob.h \
-                --replace-fail 'class VfsCfApi;' 'class Vfs;' \
-                --replace-fail 'void finalize(OCC::VfsCfApi *vfs);' 'void finalize(OCC::Vfs *vfs);'
-
-              substituteInPlace src/libsync/vfs/cfapi/hydrationjob.cpp \
-                --replace-fail '#include "vfs/cfapi/vfs_cfapi.h"' '#include "common/vfs.h"' \
-                --replace-fail 'void OCC::HydrationJob::finalize(OCC::VfsCfApi *vfs)' 'void OCC::HydrationJob::finalize(OCC::Vfs *vfs)'
-
-              substituteInPlace test/CMakeLists.txt \
-                --replace-fail $'    nextcloud_add_test(SyncXAttr)\nendif()' $'    nextcloud_add_test(SyncXAttr)\n    nextcloud_add_test(SyncFuse)\nendif()'
-
-              substituteInPlace test/nextcloud_add_test.cmake \
-                --replace-fail 'PRIVATE nextcloudsync_vfs_xattr)' 'PRIVATE nextcloudsync_vfs_xattr nextcloudsync_vfs_fuse)' \
-                --replace-fail $'            nextcloudsync_vfs_xattr\n        )' $'            nextcloudsync_vfs_xattr\n            nextcloudsync_vfs_fuse\n        )'
-            '' + previousAttrs.postPatch;
+            ''
+            + previousAttrs.postPatch;
 
             doCheck = true;
 
@@ -92,8 +71,15 @@
           version = "0.1";
           src = ./daemon;
 
-          nativeBuildInputs = [ pkgs.pkg-config pkgs.qt6.wrapQtAppsHook ];
-          buildInputs = [ pkgs.fuse3 pkgs.boost pkgs.qt6.qtbase ];
+          nativeBuildInputs = [
+            pkgs.pkg-config
+            pkgs.qt6.wrapQtAppsHook
+          ];
+          buildInputs = [
+            pkgs.fuse3
+            pkgs.boost
+            pkgs.qt6.qtbase
+          ];
 
           buildPhase = ''
             runHook preBuild
@@ -168,7 +154,8 @@
 
         checks = {
           inherit nextcloud-client-vfs-fuse nextcloud-vfs-fused;
-        } // lib.optionalAttrs (system == "x86_64-linux") {
+        }
+        // lib.optionalAttrs (system == "x86_64-linux") {
           passthrough-service = pkgs.testers.nixosTest {
             name = "nextcloud-vfs-fuse-passthrough-service";
 
@@ -282,5 +269,6 @@
             '';
           };
         };
-      });
+      }
+    );
 }
