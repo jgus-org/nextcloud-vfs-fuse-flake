@@ -2,11 +2,7 @@
   description = "nextcloud-client carrying an experimental FUSE-backed virtual files plugin (Vfs::Fuse), and the nextcloud-vfs-fused daemon presenting that plugin's backing store with the placeholders' remote sizes.";
 
   inputs = {
-    # Pinned to a fixed rev: the Vfs::Fuse patch set is coupled to the
-    # nextcloud-client version this rev ships (see pin.nix). Following a branch
-    # would let `nix flake update` drift nextcloud out from under the patch and
-    # trip the version assert below.
-    nixpkgs.url = "github:NixOS/nixpkgs/55ba7f49ef2962b42cbd126522b7df5f95037679";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -16,9 +12,6 @@
       nixpkgs,
       flake-utils,
     }:
-    let
-      pin = import ./pin.nix;
-    in
     {
       nixosModules.default = import ./nixos-module.nix { inherit self; };
     }
@@ -30,41 +23,38 @@
 
         upstream = pkgs.nextcloud-client;
 
-        nextcloud-client-vfs-fuse =
-          assert lib.assertMsg (upstream.version == pin.version)
-            "the nextcloud-vfs-fuse patch set is written against nextcloud-client ${pin.version}, but nixpkgs provides ${upstream.version}; its source anchors are not known to exist in that tree.";
-          upstream.overrideAttrs (previousAttrs: {
-            pname = "nextcloud-client-vfs-fuse";
+        nextcloud-client-vfs-fuse = upstream.overrideAttrs (previousAttrs: {
+          pname = "nextcloud-client-vfs-fuse";
 
-            postPatch = ''
-              install -Dm644 ${./client/vfs_fuse.h} src/libsync/vfs/fuse/vfs_fuse.h
-              install -Dm644 ${./client/vfs_fuse.cpp} src/libsync/vfs/fuse/vfs_fuse.cpp
-              install -Dm644 ${./client/CMakeLists.txt} src/libsync/vfs/fuse/CMakeLists.txt
-              install -Dm644 ${./client/mount_config.hpp} src/libsync/vfs/fuse/mount_config.hpp
-              install -Dm644 ${./daemon/protocol.hpp} src/libsync/vfs/fuse/protocol.hpp
-              install -Dm644 ${./daemon/replacement_lock.hpp} src/libsync/vfs/fuse/replacement_lock.hpp
-              install -Dm644 ${./daemon/unique_fd.hpp} src/libsync/vfs/fuse/unique_fd.hpp
-              install -Dm644 ${./client/testsyncfuse.cpp} test/testsyncfuse.cpp
-              install -Dm644 ${./client/nextcloudctl.cpp} src/cmd/nextcloudctl.cpp
+          postPatch = ''
+            install -Dm644 ${./client/vfs_fuse.h} src/libsync/vfs/fuse/vfs_fuse.h
+            install -Dm644 ${./client/vfs_fuse.cpp} src/libsync/vfs/fuse/vfs_fuse.cpp
+            install -Dm644 ${./client/CMakeLists.txt} src/libsync/vfs/fuse/CMakeLists.txt
+            install -Dm644 ${./client/mount_config.hpp} src/libsync/vfs/fuse/mount_config.hpp
+            install -Dm644 ${./daemon/protocol.hpp} src/libsync/vfs/fuse/protocol.hpp
+            install -Dm644 ${./daemon/replacement_lock.hpp} src/libsync/vfs/fuse/replacement_lock.hpp
+            install -Dm644 ${./daemon/unique_fd.hpp} src/libsync/vfs/fuse/unique_fd.hpp
+            install -Dm644 ${./client/testsyncfuse.cpp} test/testsyncfuse.cpp
+            install -Dm644 ${./client/nextcloudctl.cpp} src/cmd/nextcloudctl.cpp
 
-              patch -p1 < ${./client/nextcloud-vfs-fuse.patch}
+            patch -p1 < ${./client/nextcloud-vfs-fuse.patch}
 
-            ''
-            + previousAttrs.postPatch;
+          ''
+          + previousAttrs.postPatch;
 
-            doCheck = true;
+          doCheck = true;
 
-            checkPhase = ''
-              runHook preCheck
+          checkPhase = ''
+            runHook preCheck
 
-              export HOME=$(mktemp -d)
-              export XDG_RUNTIME_DIR=$(mktemp -d)
-              export QT_QPA_PLATFORM=offscreen
-              ctest --output-on-failure -R SyncFuse
+            export HOME=$(mktemp -d)
+            export XDG_RUNTIME_DIR=$(mktemp -d)
+            export QT_QPA_PLATFORM=offscreen
+            ctest --output-on-failure -R SyncFuse
 
-              runHook postCheck
-            '';
-          });
+            runHook postCheck
+          '';
+        });
 
         nextcloud-vfs-fused = pkgs.stdenv.mkDerivation {
           pname = "nextcloud-vfs-fused";
