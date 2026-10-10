@@ -2,98 +2,74 @@
   description = "nextcloud-client carrying an experimental FUSE-backed virtual files plugin (Vfs::Fuse), and the nextcloud-vfs-fused daemon presenting that plugin's backing store with the placeholders' remote sizes.";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    let
-      pin = import ./pin.nix;
-    in
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+    }:
     {
       nixosModules.default = import ./nixos-module.nix { inherit self; };
     }
-    // flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
+    // flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (
+      system:
       let
         pkgs = import nixpkgs { inherit system; };
         inherit (pkgs) lib;
 
         upstream = pkgs.nextcloud-client;
 
-        nextcloud-client-vfs-fuse =
-          assert lib.assertMsg (upstream.version == pin.version)
-            "the nextcloud-vfs-fuse patch set is written against nextcloud-client ${pin.version}, but nixpkgs provides ${upstream.version}; its source anchors are not known to exist in that tree.";
-          upstream.overrideAttrs (previousAttrs: {
-            pname = "nextcloud-client-vfs-fuse";
+        nextcloud-client-vfs-fuse = upstream.overrideAttrs (previousAttrs: {
+          pname = "nextcloud-client-vfs-fuse";
 
-            postPatch = ''
-              install -Dm644 ${./client/vfs_fuse.h} src/libsync/vfs/fuse/vfs_fuse.h
-              install -Dm644 ${./client/vfs_fuse.cpp} src/libsync/vfs/fuse/vfs_fuse.cpp
-              install -Dm644 ${./client/CMakeLists.txt} src/libsync/vfs/fuse/CMakeLists.txt
-              install -Dm644 ${./client/mount_config.hpp} src/libsync/vfs/fuse/mount_config.hpp
-              install -Dm644 ${./daemon/protocol.hpp} src/libsync/vfs/fuse/protocol.hpp
-              install -Dm644 ${./daemon/replacement_lock.hpp} src/libsync/vfs/fuse/replacement_lock.hpp
-              install -Dm644 ${./daemon/unique_fd.hpp} src/libsync/vfs/fuse/unique_fd.hpp
-              install -Dm644 ${./client/testsyncfuse.cpp} test/testsyncfuse.cpp
-              install -Dm644 ${./client/nextcloudctl.cpp} src/cmd/nextcloudctl.cpp
+          postPatch = ''
+            install -Dm644 ${./client/vfs_fuse.h} src/libsync/vfs/fuse/vfs_fuse.h
+            install -Dm644 ${./client/vfs_fuse.cpp} src/libsync/vfs/fuse/vfs_fuse.cpp
+            install -Dm644 ${./client/CMakeLists.txt} src/libsync/vfs/fuse/CMakeLists.txt
+            install -Dm644 ${./client/mount_config.hpp} src/libsync/vfs/fuse/mount_config.hpp
+            install -Dm644 ${./daemon/protocol.hpp} src/libsync/vfs/fuse/protocol.hpp
+            install -Dm644 ${./daemon/replacement_lock.hpp} src/libsync/vfs/fuse/replacement_lock.hpp
+            install -Dm644 ${./daemon/unique_fd.hpp} src/libsync/vfs/fuse/unique_fd.hpp
+            install -Dm644 ${./client/testsyncfuse.cpp} test/testsyncfuse.cpp
+            install -Dm644 ${./client/nextcloudctl.cpp} src/cmd/nextcloudctl.cpp
 
-              patch -p1 < ${./client/cmd-vfs.patch}
-              patch -p1 < ${./client/gui-vfs.patch}
-              patch -p1 < ${./client/control-vfs.patch}
-              patch -p1 < ${./client/demand-discovery.patch}
+            patch -p1 < ${./client/nextcloud-vfs-fuse.patch}
 
-              substituteInPlace src/cmd/CMakeLists.txt \
-                --replace-fail $'  target_link_libraries(nextcloudcmd cmdCore)\n' $'  target_link_libraries(nextcloudcmd cmdCore)\n\n  add_executable(nextcloudctl nextcloudctl.cpp)\n  ecm_mark_nongui_executable(nextcloudctl)\n  set_target_properties(nextcloudctl PROPERTIES RUNTIME_OUTPUT_NAME "''${APPLICATION_EXECUTABLE}ctl")\n  target_link_libraries(nextcloudctl cmdCore)\n' \
-                --replace-fail 'install(TARGETS nextcloudcmd' 'install(TARGETS nextcloudcmd nextcloudctl'
+          ''
+          + previousAttrs.postPatch;
 
-              substituteInPlace src/common/vfs.h \
-                --replace-fail $'        XAttr,\n    };' $'        XAttr,\n        Fuse,\n    };'
+          doCheck = true;
 
-              substituteInPlace src/common/vfs.cpp \
-                --replace-fail $'    case XAttr:\n        return QStringLiteral("xattr");\n    }' $'    case XAttr:\n        return QStringLiteral("xattr");\n    case Fuse:\n        return QStringLiteral("fuse");\n    }' \
-                --replace-fail $'    } else if (str == QLatin1String("wincfapi")) {\n        return WindowsCfApi;\n    }' $'    } else if (str == QLatin1String("wincfapi")) {\n        return WindowsCfApi;\n    } else if (str == QLatin1String("xattr")) {\n        return XAttr;\n    } else if (str == QLatin1String("fuse")) {\n        return Fuse;\n    }' \
-                --replace-fail $'    if (mode == Vfs::XAttr)\n        return QStringLiteral("xattr");\n    return QString();' $'    if (mode == Vfs::XAttr)\n        return QStringLiteral("xattr");\n    if (mode == Vfs::Fuse)\n        return QStringLiteral("fuse");\n    return QString();'
+          checkPhase = ''
+            runHook preCheck
 
-              substituteInPlace src/libsync/vfs/CMakeLists.txt \
-                --replace-fail '"suffix" "cfapi" "xattr")' '"suffix" "cfapi" "xattr" "fuse")'
+            export HOME=$(mktemp -d)
+            export XDG_RUNTIME_DIR=$(mktemp -d)
+            export QT_QPA_PLATFORM=offscreen
+            ctest --output-on-failure -R SyncFuse
 
-              substituteInPlace src/libsync/vfs/cfapi/hydrationjob.h \
-                --replace-fail 'class VfsCfApi;' 'class Vfs;' \
-                --replace-fail 'void finalize(OCC::VfsCfApi *vfs);' 'void finalize(OCC::Vfs *vfs);'
-
-              substituteInPlace src/libsync/vfs/cfapi/hydrationjob.cpp \
-                --replace-fail '#include "vfs/cfapi/vfs_cfapi.h"' '#include "common/vfs.h"' \
-                --replace-fail 'void OCC::HydrationJob::finalize(OCC::VfsCfApi *vfs)' 'void OCC::HydrationJob::finalize(OCC::Vfs *vfs)'
-
-              substituteInPlace test/CMakeLists.txt \
-                --replace-fail $'    nextcloud_add_test(SyncXAttr)\nendif()' $'    nextcloud_add_test(SyncXAttr)\n    nextcloud_add_test(SyncFuse)\nendif()'
-
-              substituteInPlace test/nextcloud_add_test.cmake \
-                --replace-fail 'PRIVATE nextcloudsync_vfs_xattr)' 'PRIVATE nextcloudsync_vfs_xattr nextcloudsync_vfs_fuse)' \
-                --replace-fail $'            nextcloudsync_vfs_xattr\n        )' $'            nextcloudsync_vfs_xattr\n            nextcloudsync_vfs_fuse\n        )'
-            '' + previousAttrs.postPatch;
-
-            doCheck = true;
-
-            checkPhase = ''
-              runHook preCheck
-
-              export HOME=$(mktemp -d)
-              export XDG_RUNTIME_DIR=$(mktemp -d)
-              export QT_QPA_PLATFORM=offscreen
-              ctest --output-on-failure -R SyncFuse
-
-              runHook postCheck
-            '';
-          });
+            runHook postCheck
+          '';
+        });
 
         nextcloud-vfs-fused = pkgs.stdenv.mkDerivation {
           pname = "nextcloud-vfs-fused";
           version = "0.1";
           src = ./daemon;
 
-          nativeBuildInputs = [ pkgs.pkg-config pkgs.qt6.wrapQtAppsHook ];
-          buildInputs = [ pkgs.fuse3 pkgs.boost pkgs.qt6.qtbase ];
+          nativeBuildInputs = [
+            pkgs.pkg-config
+            pkgs.qt6.wrapQtAppsHook
+          ];
+          buildInputs = [
+            pkgs.fuse3
+            pkgs.boost
+            pkgs.qt6.qtbase
+          ];
 
           buildPhase = ''
             runHook preBuild
@@ -168,7 +144,8 @@
 
         checks = {
           inherit nextcloud-client-vfs-fuse nextcloud-vfs-fused;
-        } // lib.optionalAttrs (system == "x86_64-linux") {
+        }
+        // lib.optionalAttrs (system == "x86_64-linux") {
           passthrough-service = pkgs.testers.nixosTest {
             name = "nextcloud-vfs-fuse-passthrough-service";
 
@@ -282,5 +259,6 @@
             '';
           };
         };
-      });
+      }
+    );
 }

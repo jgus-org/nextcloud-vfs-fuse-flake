@@ -345,7 +345,7 @@ QSharedPointer<Vfs> setupVfs(FakeFolder& folder, bool demandDrivenDiscovery = fa
 class TestSyncFuse : public QObject {
   Q_OBJECT
 
- private slots:
+ private Q_SLOTS:
   void testUserFacingPath() {
     FakeFolder fakeFolder{FileInfo()};
     QTemporaryDir mountPoint;
