@@ -1,5 +1,11 @@
 { self }:
-{ config, lib, pkgs, utils, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  utils,
+  ...
+}:
 let
   cfg = config.services.nextcloud-vfs-fuse;
   mountUserUid = mount: lib.attrByPath [ mount.user "uid" ] null config.users.users;
@@ -39,8 +45,9 @@ in
   };
 
   config = lib.mkIf (cfg.mounts != { }) {
-    assertions = lib.concatLists (lib.mapAttrsToList
-      (name: mount:
+    assertions = lib.concatLists (
+      lib.mapAttrsToList (
+        name: mount:
         let
           optionPath = "services.nextcloud-vfs-fuse.mounts.${name}";
         in
@@ -73,36 +80,38 @@ in
             assertion = builtins.hasAttr mount.group config.users.groups;
             message = "${optionPath}.group does not name a configured group";
           }
-        ])
-      cfg.mounts);
+        ]
+      ) cfg.mounts
+    );
 
     programs.fuse.enable = true;
 
-    systemd.services = lib.mapAttrs'
-      (name: mount:
-        let
-          uid = toString (mountUserUid mount);
-          runtimeDirectoryUnit = "user-runtime-dir@${uid}.service";
-        in
-        lib.nameValuePair "nextcloud-vfs-fused-${name}" {
-          description = "Nextcloud virtual-files FUSE view ${name}";
-          wantedBy = [ "multi-user.target" ];
-          after = [
-            "local-fs.target"
-            runtimeDirectoryUnit
-          ];
-          requires = [ runtimeDirectoryUnit ];
-          unitConfig = {
-            RequiresMountsFor = [ mount.store ];
-            StartLimitBurst = 3;
-            StartLimitIntervalSec = 60;
-          };
-          serviceConfig = {
-            Type = "simple";
-            User = mount.user;
-            Group = mount.group;
-            Environment = "XDG_RUNTIME_DIR=/run/user/${uid}";
-            ExecStartPre = "+${utils.escapeSystemdExecArgs [
+    systemd.services = lib.mapAttrs' (
+      name: mount:
+      let
+        uid = toString (mountUserUid mount);
+        runtimeDirectoryUnit = "user-runtime-dir@${uid}.service";
+      in
+      lib.nameValuePair "nextcloud-vfs-fused-${name}" {
+        description = "Nextcloud virtual-files FUSE view ${name}";
+        wantedBy = [ "multi-user.target" ];
+        after = [
+          "local-fs.target"
+          runtimeDirectoryUnit
+        ];
+        requires = [ runtimeDirectoryUnit ];
+        unitConfig = {
+          RequiresMountsFor = [ mount.store ];
+          StartLimitBurst = 3;
+          StartLimitIntervalSec = 60;
+        };
+        serviceConfig = {
+          Type = "simple";
+          User = mount.user;
+          Group = mount.group;
+          Environment = "XDG_RUNTIME_DIR=/run/user/${uid}";
+          ExecStartPre = "+${
+            utils.escapeSystemdExecArgs [
               (lib.getExe' pkgs.coreutils "install")
               "-d"
               "-m"
@@ -113,33 +122,34 @@ in
               mount.group
               mount.store
               mount.mountPoint
-            ]}";
-            ExecStart = utils.escapeSystemdExecArgs [
-              (lib.getExe' cfg.package "nextcloud-vfs-fused")
-              "--foreground"
-              "--passthrough"
-              "required"
-              "--store"
-              mount.store
-              "--mount"
-              mount.mountPoint
-            ];
-            Restart = "on-failure";
-            RestartSec = 2;
-            LimitNOFILE = 1048576;
-            DevicePolicy = "closed";
-            DeviceAllow = [ "/dev/fuse rw" ];
-            LockPersonality = true;
-            MemoryDenyWriteExecute = true;
-            NoNewPrivileges = true;
-            RestrictAddressFamilies = [ "AF_UNIX" ];
-            RestrictNamespaces = true;
-            RestrictRealtime = true;
-            RestrictSUIDSGID = true;
-            AmbientCapabilities = [ "CAP_SYS_ADMIN" ];
-            CapabilityBoundingSet = [ "CAP_SYS_ADMIN" ];
-          };
-        })
-      cfg.mounts;
+            ]
+          }";
+          ExecStart = utils.escapeSystemdExecArgs [
+            (lib.getExe' cfg.package "nextcloud-vfs-fused")
+            "--foreground"
+            "--passthrough"
+            "required"
+            "--store"
+            mount.store
+            "--mount"
+            mount.mountPoint
+          ];
+          Restart = "on-failure";
+          RestartSec = 2;
+          LimitNOFILE = 1048576;
+          DevicePolicy = "closed";
+          DeviceAllow = [ "/dev/fuse rw" ];
+          LockPersonality = true;
+          MemoryDenyWriteExecute = true;
+          NoNewPrivileges = true;
+          RestrictAddressFamilies = [ "AF_UNIX" ];
+          RestrictNamespaces = true;
+          RestrictRealtime = true;
+          RestrictSUIDSGID = true;
+          AmbientCapabilities = [ "CAP_SYS_ADMIN" ];
+          CapabilityBoundingSet = [ "CAP_SYS_ADMIN" ];
+        };
+      }
+    ) cfg.mounts;
   };
 }
