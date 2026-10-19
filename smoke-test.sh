@@ -105,8 +105,8 @@ done
 
 BACKING_FILE=$(realpath -e -- "${STORE}/${RELATIVE_FILE}")
 case ${BACKING_FILE} in
-  "${STORE}"/*) ;;
-  *) fail 'RELATIVE_FILE resolves outside STORE' ;;
+"${STORE}"/*) ;;
+*) fail 'RELATIVE_FILE resolves outside STORE' ;;
 esac
 
 REMOTE_SIZE=$(getfattr --absolute-names --only-values -n user.nextcloud.vfs_fuse "${BACKING_FILE}" 2>/dev/null) || fail 'the selected backing file is not a placeholder'

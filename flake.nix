@@ -4,6 +4,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    treefmt-nix = {
+      url = "github:numtide/treefmt-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -11,6 +15,7 @@
       self,
       nixpkgs,
       flake-utils,
+      treefmt-nix,
     }:
     {
       nixosModules.default = import ./nixos-module.nix { inherit self; };
@@ -20,6 +25,13 @@
       let
         pkgs = import nixpkgs { inherit system; };
         inherit (pkgs) lib;
+
+        treefmtEval = treefmt-nix.lib.evalModule pkgs {
+          projectRootFile = "flake.nix";
+          programs.nixfmt.enable = true;
+          programs.clang-format.enable = true;
+          programs.shfmt.enable = true;
+        };
 
         upstream = pkgs.nextcloud-client;
 
@@ -106,6 +118,8 @@
         };
       in
       {
+        formatter = treefmtEval.config.build.wrapper;
+
         packages = {
           inherit nextcloud-client-vfs-fuse nextcloud-vfs-fused;
           default = nextcloud-client-vfs-fuse;
@@ -144,6 +158,7 @@
 
         checks = {
           inherit nextcloud-client-vfs-fuse nextcloud-vfs-fused;
+          formatting = treefmtEval.config.build.check self;
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
           passthrough-service = pkgs.testers.nixosTest {
