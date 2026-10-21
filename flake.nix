@@ -3,7 +3,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
+    flake-lib = {
+      url = "github:jgus-org/flake-lib/v1";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     treefmt-nix = {
       url = "github:numtide/treefmt-nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -14,13 +17,13 @@
     {
       self,
       nixpkgs,
-      flake-utils,
+      flake-lib,
       treefmt-nix,
     }:
     {
       nixosModules.default = import ./nixos-module.nix { inherit self; };
     }
-    // flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (
+    // flake-lib.lib.eachDefaultLinuxSystem (
       system:
       let
         pkgs = import nixpkgs { inherit system; };
@@ -113,7 +116,7 @@
           meta = {
             description = "FUSE daemon presenting and hydrating the Vfs::Fuse backing store";
             mainProgram = "nextcloud-vfs-fused";
-            platforms = lib.platforms.linux;
+            platforms = flake-lib.lib.defaultLinuxSystems;
           };
         };
       in
