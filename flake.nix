@@ -2,23 +2,15 @@
   description = "nextcloud-client carrying an experimental FUSE-backed virtual files plugin (Vfs::Fuse), and the nextcloud-vfs-fused daemon presenting that plugin's backing store with the placeholders' remote sizes.";
 
   inputs = {
+    flake-lib.url = "github:jgus-org/flake-lib/v1";
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-lib = {
-      url = "github:jgus-org/flake-lib/v1";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    treefmt-nix = {
-      url = "github:numtide/treefmt-nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs =
     {
       self,
-      nixpkgs,
       flake-lib,
-      treefmt-nix,
+      nixpkgs,
     }:
     {
       nixosModules.default = import ./nixos-module.nix { inherit self; };
@@ -29,18 +21,25 @@
         pkgs = import nixpkgs { inherit system; };
         inherit (pkgs) lib;
 
-        treefmtEval = treefmt-nix.lib.evalModule pkgs {
-          projectRootFile = "flake.nix";
-          programs.nixfmt.enable = true;
-          programs.clang-format.enable = true;
-          programs.shfmt.enable = true;
+        orgFormatting = flake-lib.lib.mkFormatting {
+          inherit self system;
         };
 
         upstream = pkgs.nextcloud-client;
 
         nextcloud-client-vfs-fuse = upstream.overrideAttrs (previousAttrs: {
-          pname = "nextcloud-client-vfs-fuse";
+          checkPhase = ''
+            runHook preCheck
 
+            export HOME=$(mktemp -d)
+            export XDG_RUNTIME_DIR=$(mktemp -d)
+            export QT_QPA_PLATFORM=offscreen
+            ctest --output-on-failure -R SyncFuse
+
+            runHook postCheck
+          '';
+          doCheck = true;
+          pname = "nextcloud-client-vfs-fuse";
           postPatch = ''
             install -Dm644 ${./client/vfs_fuse.h} src/libsync/vfs/fuse/vfs_fuse.h
             install -Dm644 ${./client/vfs_fuse.cpp} src/libsync/vfs/fuse/vfs_fuse.cpp
@@ -56,45 +55,20 @@
 
           ''
           + previousAttrs.postPatch;
-
-          doCheck = true;
-
-          checkPhase = ''
-            runHook preCheck
-
-            export HOME=$(mktemp -d)
-            export XDG_RUNTIME_DIR=$(mktemp -d)
-            export QT_QPA_PLATFORM=offscreen
-            ctest --output-on-failure -R SyncFuse
-
-            runHook postCheck
-          '';
         });
 
         nextcloud-vfs-fused = pkgs.stdenv.mkDerivation {
-          pname = "nextcloud-vfs-fused";
-          version = "0.1";
-          src = ./daemon;
-
-          nativeBuildInputs = [
-            pkgs.pkg-config
-            pkgs.qt6.wrapQtAppsHook
-          ];
           buildInputs = [
             pkgs.fuse3
             pkgs.boost
             pkgs.qt6.qtbase
           ];
-
           buildPhase = ''
             runHook preBuild
             ''${CXX} -O3 -Wall -Wextra -pipe -std=c++23 -o nextcloud-vfs-fused *.cpp \
               $(pkg-config --cflags --libs fuse3 Qt6Core Qt6Network) -lboost_program_options
             runHook postBuild
           '';
-
-          doCheck = true;
-
           checkPhase = ''
             runHook preCheck
             STORE=$(mktemp -d)
@@ -106,62 +80,57 @@
             grep -Fx "the mount point ''${MOUNT} is not empty" check.log
             runHook postCheck
           '';
-
+          doCheck = true;
           installPhase = ''
             runHook preInstall
             install -Dm755 nextcloud-vfs-fused "$out/bin/nextcloud-vfs-fused"
             runHook postInstall
           '';
-
           meta = {
             description = "FUSE daemon presenting and hydrating the Vfs::Fuse backing store";
             mainProgram = "nextcloud-vfs-fused";
             platforms = flake-lib.lib.defaultLinuxSystems;
           };
+          nativeBuildInputs = [
+            pkgs.pkg-config
+            pkgs.qt6.wrapQtAppsHook
+          ];
+          pname = "nextcloud-vfs-fused";
+          src = ./daemon;
+          version = "0.1";
         };
       in
       {
-        formatter = treefmtEval.config.build.wrapper;
-
-        packages = {
-          inherit nextcloud-client-vfs-fuse nextcloud-vfs-fused;
-          default = nextcloud-client-vfs-fuse;
-        };
-
         apps =
           let
             nextcloudcmd = {
-              type = "app";
-              program = lib.getExe' nextcloud-client-vfs-fuse "nextcloudcmd";
               meta.description = "Headless sync driver, the harness for exercising --vfs fuse.";
+              program = lib.getExe' nextcloud-client-vfs-fuse "nextcloudcmd";
+              type = "app";
             };
           in
           {
             inherit nextcloudcmd;
             default = nextcloudcmd;
-
-            nextcloudctl = {
-              type = "app";
-              program = lib.getExe' nextcloud-client-vfs-fuse "nextcloudctl";
-              meta.description = "Controls virtual-file availability through the running Nextcloud client.";
-            };
-
             nextcloud = {
-              type = "app";
-              program = lib.getExe nextcloud-client-vfs-fuse;
               meta.description = "The desktop client GUI built against the same patch set.";
-            };
-
-            nextcloud-vfs-fused = {
+              program = lib.getExe nextcloud-client-vfs-fuse;
               type = "app";
-              program = lib.getExe' nextcloud-vfs-fused "nextcloud-vfs-fused";
+            };
+            nextcloud-vfs-fused = {
               meta.description = "Mounts a backing store so its placeholders read at their remote sizes.";
+              program = lib.getExe' nextcloud-vfs-fused "nextcloud-vfs-fused";
+              type = "app";
+            };
+            nextcloudctl = {
+              meta.description = "Controls virtual-file availability through the running Nextcloud client.";
+              program = lib.getExe' nextcloud-client-vfs-fuse "nextcloudctl";
+              type = "app";
             };
           };
-
         checks = {
           inherit nextcloud-client-vfs-fuse nextcloud-vfs-fused;
-          formatting = treefmtEval.config.build.check self;
+          formatting = orgFormatting.check;
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
           passthrough-service = pkgs.testers.nixosTest {
@@ -169,28 +138,26 @@
 
             nodes.machine = { ... }: {
               imports = [ self.nixosModules.default ];
-
+              services.nextcloud-vfs-fuse.mounts = {
+                personal = {
+                  group = "nextcloud";
+                  mountPoint = "/mnt/nextcloud-personal";
+                  store = "/var/lib/nextcloud-vfs-fuse/personal";
+                  user = "nextcloud";
+                };
+                work = {
+                  group = "nextcloud";
+                  mountPoint = "/mnt/nextcloud-work";
+                  store = "/var/lib/nextcloud-vfs-fuse/work";
+                  user = "nextcloud";
+                };
+              };
               users = {
                 groups.nextcloud.gid = 1000;
                 users.nextcloud = {
+                  group = "nextcloud";
                   isNormalUser = true;
                   uid = 1000;
-                  group = "nextcloud";
-                };
-              };
-
-              services.nextcloud-vfs-fuse.mounts = {
-                personal = {
-                  user = "nextcloud";
-                  group = "nextcloud";
-                  store = "/var/lib/nextcloud-vfs-fuse/personal";
-                  mountPoint = "/mnt/nextcloud-personal";
-                };
-                work = {
-                  user = "nextcloud";
-                  group = "nextcloud";
-                  store = "/var/lib/nextcloud-vfs-fuse/work";
-                  mountPoint = "/mnt/nextcloud-work";
                 };
               };
             };
@@ -276,6 +243,11 @@
                   machine.require_unit_state(unit, "active")
             '';
           };
+        };
+        formatter = orgFormatting.formatter;
+        packages = {
+          inherit nextcloud-client-vfs-fuse nextcloud-vfs-fused;
+          default = nextcloud-client-vfs-fuse;
         };
       }
     );
