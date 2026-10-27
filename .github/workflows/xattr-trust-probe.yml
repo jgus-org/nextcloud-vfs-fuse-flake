@@ -1,0 +1,45 @@
+name: xattr trust probe
+
+on:
+  pull_request: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: jgus-org/flake-lib/.github/actions/nix@v1
+
+      - name: Ask whether this runner will lift its syscall filter when asked
+        run: |
+          whoami
+          nix --version
+          nix config show filter-syscalls trusted-users
+
+          cat >"${RUNNER_TEMP}/probe.nix" <<'NIX'
+          let
+            pkgs = (builtins.getFlake "github:NixOS/nixpkgs/nixpkgs-unstable").legacyPackages.x86_64-linux;
+          in
+          pkgs.runCommand "xattr-trust-probe"
+            { nativeBuildInputs = [ pkgs.attr ]; }
+            ''
+              touch target
+              setfattr -n user.nextcloud.vfs_fuse -v 1 target
+              getfattr -d target
+              mkdir -p "$out"
+            ''
+          NIX
+
+          echo "== unsandboxed, outside nix =="
+          touch "${RUNNER_TEMP}/target"
+          setfattr -n user.nextcloud.vfs_fuse -v 1 "${RUNNER_TEMP}/target" && echo "OUTSIDE NIX OK"
+
+          echo "== inside the sandbox, not asked =="
+          nix build --no-link -L --impure --file "${RUNNER_TEMP}/probe.nix" \
+            && echo "NOT ASKED PASSED" || echo "NOT ASKED FAILED"
+
+          echo "== inside the sandbox, asked =="
+          nix build --no-link -L --impure --option filter-syscalls false --file "${RUNNER_TEMP}/probe.nix" \
+            && echo "ASKED PASSED" || echo "ASKED FAILED"
