@@ -1,0 +1,30 @@
+name: kvm probe
+
+on:
+  pull_request: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          enable_kvm: true
+
+      - name: Runner KVM facts
+        run: |
+          uname -r
+          nproc
+          ls -l /dev/kvm 2>/dev/null || echo "NO /dev/kvm"
+          ls -l /dev/fuse 2>/dev/null || echo "no /dev/fuse"
+          id
+          egrep -c '(vmx|svm)' /proc/cpuinfo || echo "no virtualisation flags"
+          nix config show | grep -E 'system-features|^sandbox =' || true
+
+      - name: Boot a nixosTest VM and probe xattrs inside it
+        run: time nix build --impure --no-link -L -f ./kvm-probe.nix
