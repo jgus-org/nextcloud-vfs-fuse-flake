@@ -11,6 +11,8 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+
       - uses: cachix/install-nix-action@v31
 
       - name: Host facts
@@ -47,3 +49,6 @@ jobs:
 
       - name: In-sandbox xattr probe
         run: nix build --impure --no-link -L -f ./xattr-probe.nix
+
+      - name: In-sandbox xattr probe with seccomp filtering off
+        run: nix build --impure --no-link -L --rebuild --option filter-syscalls false -f ./xattr-probe.nix
