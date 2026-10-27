@@ -1,6 +1,7 @@
 name: xattr probe
 
 on:
+  pull_request: {}
   workflow_dispatch: {}
 
 permissions:
