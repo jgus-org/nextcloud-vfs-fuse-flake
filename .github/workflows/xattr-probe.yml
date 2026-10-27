@@ -1,0 +1,48 @@
+name: xattr probe
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: cachix/install-nix-action@v31
+
+      - name: Host facts
+        run: |
+          uname -a
+          echo "== mounts of interest =="
+          grep -E ' (/|/tmp|/home|/nix|/mnt|/build)([[:space:]]|$)' /proc/mounts || true
+          echo "== host fstype =="
+          stat -f -c '%T %n' / /tmp /home/runner /nix /nix/var/nix /mnt 2>/dev/null || true
+          echo "== host xattr probe (python3, unsandboxed) =="
+          python3 - <<'PY'
+          import os
+
+          for d in ("/tmp", "/home/runner/work", "/nix/var/nix"):
+              p = os.path.join(d, "xattr-probe-target")
+              try:
+                  with open(p, "wb") as f:
+                      f.write(b"x")
+              except OSError as e:
+                  print(f"HOST {d} unwritable: {e}", flush=True)
+                  continue
+              try:
+                  os.setxattr(p, "user.nextcloud.vfs_fuse.probe", b"probe")
+                  print(f"HOST {d} setxattr user.* OK", flush=True)
+                  os.removexattr(p, "user.nextcloud.vfs_fuse.probe")
+              except OSError as e:
+                  print(f"HOST {d} setxattr user.* errno={e.errno} {os.strerror(e.errno)}", flush=True)
+              os.unlink(p)
+          PY
+          echo "== nix config =="
+          nix show-config | grep -E 'sandbox|tmp-dir|filter-syscalls|^system' || true
+          cat /etc/nix/nix.conf || true
+          nix --version
+
+      - name: In-sandbox xattr probe
+        run: nix build --impure --no-link -L -f ./xattr-probe.nix
