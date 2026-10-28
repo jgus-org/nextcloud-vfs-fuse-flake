@@ -13,6 +13,14 @@ The two halves have distinct jobs. The sync client owns the backing store — it
 
 Both packages are defined for `aarch64-linux` and `x86_64-linux`.
 
+Building the client runs `SyncFuseTest`, which writes the placeholder marker attributes, and nix's
+build sandbox refuses those syscalls with `ENOTSUP` whatever filesystem the build runs on.
+`.github/nix.conf` asks for `filter-syscalls = false`, and the CI gate applies that fragment to every
+nix call in the run — it has to reach the command that builds the packages, which is not a command
+rooted in this flake and so cannot read the request from it. CI is all that file covers: a setting
+nix calls restricted is honored only from a user nix trusts, so a local build whose nix does not
+trust its user fails in this suite rather than passing.
+
 ```nix
 # flake input
 nextcloud-vfs-fuse = {
