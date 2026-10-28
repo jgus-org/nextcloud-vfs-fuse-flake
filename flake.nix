@@ -129,7 +129,6 @@
             };
           };
         checks = {
-          inherit nextcloud-client-vfs-fuse nextcloud-vfs-fused;
           formatting = orgFormatting.check;
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
