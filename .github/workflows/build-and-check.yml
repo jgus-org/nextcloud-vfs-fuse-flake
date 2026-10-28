@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: jgus-org/flake-lib/.github/actions/nix@v1
+      - uses: jgus-org/flake-lib/.github/actions/nix@agent/ci-build-options
         with:
           token: ${{ secrets.ATTIC_TOKEN }}
           github-token: ${{ secrets.BUILD_TOKEN }}
