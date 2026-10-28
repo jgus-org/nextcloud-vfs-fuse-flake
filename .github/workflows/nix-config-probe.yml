@@ -1,0 +1,48 @@
+name: nix config probe
+
+on:
+  pull_request: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: jgus-org/flake-lib/.github/actions/nix@v1
+
+      - name: Read the flake's nix settings into the job
+        run: |
+          whoami
+          nix --version
+          nix config show filter-syscalls
+          nix config show trusted-users
+          CONFIG=$(nix eval --raw --no-write-lock-file --impure \
+            --expr 'let f = builtins.getFlake (toString ./.); in f.nixConfig or ""')
+          echo "read from the flake: ${CONFIG}"
+          if [ -n "${CONFIG}" ]; then
+            printf 'NIX_CONFIG=%s\n' "${CONFIG}" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Build something no cache can answer for
+        run: |
+          nix config show filter-syscalls
+          RUN_ID="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cat >"${RUNNER_TEMP}/probe.nix" <<NIX
+          let
+            pkgs = (builtins.getFlake "github:NixOS/nixpkgs/nixpkgs-unstable").legacyPackages.x86_64-linux;
+          in
+          pkgs.runCommand "xattr-probe-${RUN_ID}"
+            { nativeBuildInputs = [ pkgs.attr ]; }
+            ''
+              touch target
+              setfattr -n user.nextcloud.vfs_fuse -v ${RUN_ID} target
+              getfattr -n user.nextcloud.vfs_fuse target
+              mkdir -p "$out"
+            ''
+          NIX
+          nix build --no-link -L --impure --file "${RUNNER_TEMP}/probe.nix" \
+            && echo "BUILT AND RAN UNDER NIX_CONFIG" || echo "BUILD OR XATTR FAILED"
