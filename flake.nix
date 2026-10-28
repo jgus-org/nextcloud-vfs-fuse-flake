@@ -13,6 +13,9 @@
       nixpkgs,
     }:
     {
+      nixConfig = ''
+        filter-syscalls = false
+      '';
       nixosModules.default = import ./nixos-module.nix { inherit self; };
     }
     // flake-lib.lib.eachDefaultLinuxSystem (
@@ -99,6 +102,19 @@
           src = ./daemon;
           version = "0.1";
         };
+
+        xattr-probe =
+          pkgs.runCommand "xattr-probe"
+            {
+              buildInputs = [ pkgs.attr ];
+            }
+            ''
+              touch probe
+              setfattr -n user.probe -v present probe
+              printf 'xattr read back: %s\n' "$(getfattr -n user.probe --only-values probe)"
+              mkdir -p "$out"
+              cp probe "$out/probe"
+            '';
       in
       {
         apps =
@@ -246,7 +262,7 @@
         };
         formatter = orgFormatting.formatter;
         packages = {
-          inherit nextcloud-client-vfs-fuse nextcloud-vfs-fused;
+          inherit nextcloud-client-vfs-fuse nextcloud-vfs-fused xattr-probe;
           default = nextcloud-client-vfs-fuse;
         };
       }
