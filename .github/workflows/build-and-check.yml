@@ -1,7 +1,7 @@
 # The gate a pull request has to pass: build every package this flake publishes for the
 # runner's system, then `nix flake check`. The check alone is not the gate -- it looks at
 # the shape of `packages` without building them -- and the updater's build is not either,
-# running on the publication path after the merge. A package a hosted runner cannot build
+# running on the publication path after the merge. A package the runner cannot build
 # sets `passthru.ciBuildSkip = true` with the reason beside it, and the run names every
 # package it skipped.
 #
@@ -13,6 +13,13 @@
 # and a repository or fork pull request with no token runs on the public cache alone. Nix
 # fetches a github input anonymously, so a flake that locks a private repository needs
 # BUILD_TOKEN, and a repository without it runs on the public inputs it can fetch.
+#
+# A gate runs on a hosted runner unless the repository sets the `RUNNER` variable to a
+# label one of its own runners carries. A repository whose builds need a nix setting this
+# runner does not default to publishes `nixConfig` in its flake -- a nix.conf fragment,
+# applied to every nix call in the run, build and check alike -- and the run names what was
+# asked for, so the runner's defaults stay the defaults for a repository that asks for
+# nothing.
 
 name: Build and Check
 
@@ -29,11 +36,13 @@ concurrency:
 
 jobs:
   build-and-check:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
 
-      - uses: cachix/install-nix-action@v31
+      - uses: jgus-org/flake-lib/.github/actions/nix@v1
+        with:
+          token: ${{ secrets.ATTIC_TOKEN }}
 
       # An input in a private repository is invisible until a token says otherwise, and the
       # setting is client-side: the process that resolves the lock reads it, so the daemon
@@ -47,9 +56,20 @@ jobs:
             printf 'access-tokens = github.com=%s\n' "$BUILD_TOKEN" >> ~/.config/nix/nix.conf
           fi
 
-      - uses: jgus-org/flake-lib/.github/actions/fleet-nix-cache@v1
-        with:
-          token: ${{ secrets.ATTIC_TOKEN }}
+      # The setting travels as an environment variable because both commands this gate runs
+      # read nix.conf, and a step that reaches the settings of every later step is what keeps
+      # a build and a check of the same derivation from running under two different sandboxes.
+      # The flake is read whole rather than through an installable, because a bare flake
+      # resolves its default package and this output is not one. A flake that publishes no
+      # such output reads as the empty string and asks for nothing.
+      - name: Apply the nix settings this flake asks for
+        run: |
+          CONFIG=$(nix eval --raw --no-write-lock-file --impure \
+            --expr 'let f = builtins.getFlake (toString ./.); in f.nixConfig or ""')
+          if [ -n "${CONFIG}" ]; then
+            printf 'NIX_CONFIG=%s\n' "${CONFIG}" >> "${GITHUB_ENV}"
+            printf 'this flake asks nix for: %s\n' "${CONFIG}"
+          fi
 
       - name: Build every package this flake publishes for this runner
         run: nix run github:jgus-org/flake-lib/v1#build-packages
