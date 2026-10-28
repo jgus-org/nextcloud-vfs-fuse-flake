@@ -34,7 +34,7 @@
             export HOME=$(mktemp -d)
             export XDG_RUNTIME_DIR=$(mktemp -d)
             export QT_QPA_PLATFORM=offscreen
-            export SYNCFUSE_PROBE_TAG=nix-conf-probe-2
+            export SYNCFUSE_PROBE_TAG=nix-conf-probe-3
             ctest --output-on-failure -R SyncFuse
 
             runHook postCheck
