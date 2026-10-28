@@ -16,7 +16,8 @@ jobs:
         run: |
           whoami
           nix --version
-          nix config show filter-syscalls trusted-users
+          nix config show filter-syscalls
+          nix config show trusted-users
 
           cat >"${RUNNER_TEMP}/probe.nix" <<'NIX'
           let
