@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: CC0-1.0
  */
 
+// Forces a fresh derivation so a hosted runner builds this instead of substituting it.
 #include <fcntl.h>
 #include <syncengine.h>
 #include <sys/stat.h>
