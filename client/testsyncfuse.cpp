@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: CC0-1.0
  */
 
-// Forces a fresh derivation so a hosted runner builds this instead of substituting it.
+// Probe marker: no functional content, exists so this source differs from every revision the
+// shared cache has already been asked to build.
 #include <fcntl.h>
 #include <syncengine.h>
 #include <sys/stat.h>
