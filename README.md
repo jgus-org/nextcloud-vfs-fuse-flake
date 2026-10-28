@@ -67,3 +67,5 @@ While a file is open through the mount, the daemon holds an exclusive lease on i
 The `fuse` virtual-files backend, its xattrs, and the `nextcloudctl` tool come from this repository's patch to the client, so a backing store written by this build is understood only by this build. The patched `nextcloudcmd` gains `--vfs fuse`, `--root-pin {unspecified,alwayslocal,onlineonly}`, and `--vfs-daemon` (keep serving virtual files and synchronize periodically); `nextcloud-vfs-fused --help` lists the daemon's own options.
 
 `smoke-test.sh` runs the whole path against a real server: `NC_USER=… NC_PASSWORD=… ./smoke-test.sh <store> <server-url> <remote-path> <relative-file>` builds this checkout's client and daemon, syncs the prefix online-only, mounts the store, and checks that the chosen placeholder reads at its remote size and hydrates to matching content.
+
+See [LICENSE.md](LICENSE.md) for licensing and copyright, and [NOTICE.md](NOTICE.md) for the terms of upstream and distributed artifacts.
