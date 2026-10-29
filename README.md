@@ -33,15 +33,15 @@ imports = [ nextcloud-vfs-fuse.nixosModules.default ];
 
 services.nextcloud-vfs-fuse.mounts = {
   personal = {
-    user = "nextcloud";
-    group = "nextcloud";
-    store = "/var/lib/nextcloud-vfs-fuse/personal";
-    mountPoint = "/mnt/nextcloud-personal";
+    user = "alice";
+    group = "users";
+    store = "/home/alice/.local/share/nextcloud-vfs-fuse/store";
+    mountPoint = "/home/alice/Nextcloud";
   };
 };
 ```
 
-The module is inert until at least one mount is configured. It enables `programs.fuse`, creates `nextcloud-vfs-fused-<name>.service` per mount, and pre-creates `store` and `mountPoint` mode `0700` owned by the mount's user and group. `services.nextcloud-vfs-fuse.package` selects the daemon package and defaults to this flake's.
+The module is inert until at least one mount is configured. It enables `programs.fuse`, creates `nextcloud-vfs-fused-<name>.service` per mount, and pre-creates `store` and `mountPoint` mode `0700` as the mount's user. `services.nextcloud-vfs-fuse.package` selects the daemon package and defaults to this flake's.
 
 ## Requirements the module enforces
 

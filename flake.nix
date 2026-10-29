@@ -140,14 +140,14 @@
               services.nextcloud-vfs-fuse.mounts = {
                 personal = {
                   group = "nextcloud";
-                  mountPoint = "/mnt/nextcloud-personal";
-                  store = "/var/lib/nextcloud-vfs-fuse/personal";
+                  mountPoint = "/home/nextcloud/nextcloud-personal";
+                  store = "/home/nextcloud/.local/share/nextcloud-vfs-fuse/personal";
                   user = "nextcloud";
                 };
                 work = {
                   group = "nextcloud";
-                  mountPoint = "/mnt/nextcloud-work";
-                  store = "/var/lib/nextcloud-vfs-fuse/work";
+                  mountPoint = "/home/nextcloud/nextcloud-work";
+                  store = "/home/nextcloud/.local/share/nextcloud-vfs-fuse/work";
                   user = "nextcloud";
                 };
               };
@@ -208,8 +208,8 @@
 
               start_all()
               instances = [
-                  ("personal", "/var/lib/nextcloud-vfs-fuse/personal", "/mnt/nextcloud-personal"),
-                  ("work", "/var/lib/nextcloud-vfs-fuse/work", "/mnt/nextcloud-work"),
+                  ("personal", "/home/nextcloud/.local/share/nextcloud-vfs-fuse/personal", "/home/nextcloud/nextcloud-personal"),
+                  ("work", "/home/nextcloud/.local/share/nextcloud-vfs-fuse/work", "/home/nextcloud/nextcloud-work"),
               ]
               for name, store, mount in instances:
                   unit = f"nextcloud-vfs-fused-{name}.service"
