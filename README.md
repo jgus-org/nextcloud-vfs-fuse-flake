@@ -41,7 +41,7 @@ services.nextcloud-vfs-fuse.mounts = {
 };
 ```
 
-The module is inert until at least one mount is configured. It enables `programs.fuse`, creates `nextcloud-vfs-fused-<name>.service` per mount, and pre-creates `store` and `mountPoint` mode `0700` **as the mount's user**: the pre-start runs unprivileged under the unit's `User=`/`Group=`, so both paths must live where that user can create directories — normally inside that user's own home — and new directories inherit the unit's group. A path under a directory the mount user cannot write is the consumer's to create. `services.nextcloud-vfs-fuse.package` selects the daemon package and defaults to this flake's.
+The module is inert until at least one mount is configured. It enables `programs.fuse`, creates `nextcloud-vfs-fused-<name>.service` per mount, and pre-creates `store` and `mountPoint` mode `0700` as the mount's user. `services.nextcloud-vfs-fuse.package` selects the daemon package and defaults to this flake's.
 
 ## Requirements the module enforces
 
