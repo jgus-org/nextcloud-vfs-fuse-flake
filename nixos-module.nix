@@ -82,20 +82,14 @@ in
             "--mount"
             mount.mountPoint
           ];
-          ExecStartPre = "+${
-            utils.escapeSystemdExecArgs [
-              (lib.getExe' pkgs.coreutils "install")
-              "-d"
-              "-m"
-              "0700"
-              "-o"
-              mount.user
-              "-g"
-              mount.group
-              mount.store
-              mount.mountPoint
-            ]
-          }";
+          ExecStartPre = utils.escapeSystemdExecArgs [
+            (lib.getExe' pkgs.coreutils "install")
+            "-d"
+            "-m"
+            "0700"
+            mount.store
+            mount.mountPoint
+          ];
           Group = mount.group;
           LimitNOFILE = 1048576;
           LockPersonality = true;
