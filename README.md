@@ -66,6 +66,10 @@ While a file is open through the mount, the daemon holds an exclusive lease on i
 
 The `fuse` virtual-files backend, its xattrs, and the `nextcloudctl` tool come from this repository's patch to the client, so a backing store written by this build is understood only by this build. The patched `nextcloudcmd` gains `--vfs fuse`, `--root-pin {unspecified,alwayslocal,onlineonly}`, and `--vfs-daemon` (keep serving virtual files and synchronize periodically); `nextcloud-vfs-fused --help` lists the daemon's own options.
 
+The GUI client provisions an account from its command line: `nextcloud --userid <user> --serverurl <url> --localdirpath <store> [--remotedirpath <path>] --isvfsenabled 1` adds the account and one sync folder, then exits.
+
+A GUI client that starts with no configured account at all instead takes the same four parameters from its environment: `NC_USER`, `NC_PASSWORD`, `NC_SERVER_URL`, `NC_LOCAL_DIR`. With all four set it creates the account and its sync folder, with virtual files, before its window and tray appear, and then runs as an ordinary client instead of exiting. The wait for the server is bounded at 30 seconds; past it the client starts normally and the account appears whenever the server answers. Nothing else is read from the environment: one that names only some of the four, or names them for a client that already has an account, leaves the client at its usual wizard, and `nextcloudcmd` never looks at them. The app password is written to the desktop credential store while the account is created, which is the only moment it is read from the environment.
+
 `smoke-test.sh` runs the whole path against a real server: `NC_USER=… NC_PASSWORD=… ./smoke-test.sh <store> <server-url> <remote-path> <relative-file>` builds this checkout's client and daemon, syncs the prefix online-only, mounts the store, and checks that the chosen placeholder reads at its remote size and hydrates to matching content.
 
 See [LICENSE.md](LICENSE.md) for licensing and copyright, and [NOTICE.md](NOTICE.md) for the terms of upstream and distributed artifacts.
