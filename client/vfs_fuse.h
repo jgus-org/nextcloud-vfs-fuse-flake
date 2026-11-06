@@ -64,6 +64,8 @@ class VfsFuse : public Vfs {
   Optional<PinState> pinState(const QString& folderPath) override;
   AvailabilityResult availability(const QString& folderPath, const AvailabilityRecursivity recursiveCheck) override;
 
+  [[nodiscard]] HydrationJob* hydrateFile(const QByteArray& fileId, const QString& targetPath) override;
+
  public slots:
   void fileStatusChanged(const QString& systemFileName, OCC::SyncFileStatus fileStatus) override;
 
@@ -102,6 +104,9 @@ class FuseVfsPluginFactory : public QObject, public DefaultPluginFactory<VfsFuse
   Q_OBJECT
   Q_PLUGIN_METADATA(IID "org.owncloud.PluginFactory" FILE "vfspluginmetadata.json")
   Q_INTERFACES(OCC::PluginFactory)
+
+ public:
+  [[nodiscard]] Result<void, QString> prepare(const QString& path, const QUuid& accountUuid) const override;
 };
 
 }  // namespace OCC

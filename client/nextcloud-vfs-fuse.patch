@@ -27,7 +27,7 @@ diff --git a/src/cmd/cmd.cpp b/src/cmd/cmd.cpp
 index 163e6c4..77f03a9 100644
 --- a/src/cmd/cmd.cpp
 +++ b/src/cmd/cmd.cpp
-@@ -58,6 +58,20 @@
+@@ -60,6 +60,20 @@
  using namespace OCC;
  using namespace Qt::StringLiterals;
  
@@ -48,7 +48,7 @@ index 163e6c4..77f03a9 100644
  static void nullMessageHandler(QtMsgType, const QMessageLogContext &, const QString &)
  {
  }
-@@ -81,6 +95,11 @@ struct CmdOptions
+@@ -84,6 +98,11 @@
      int restartTimes = 0;
      int downlimit = 0;
      int uplimit = 0;
@@ -60,7 +60,7 @@ index 163e6c4..77f03a9 100644
  };
  
  // we can't use csync_set_userdata because the SyncEngine sets it already.
-@@ -195,6 +214,11 @@ void help()
+@@ -202,6 +221,11 @@
      std::cout << "  --logdebug             More verbose logging" << std::endl;
      std::cout << "  --path                 Path to a folder on a remote server" << std::endl;
      std::cout << "  --confdir [dir]        Use the given configuration directory" << std::endl;
@@ -70,9 +70,9 @@ index 163e6c4..77f03a9 100644
 +    std::cout << "  --vfs-daemon           Keep serving virtual files and synchronize periodically" << std::endl;
 +    std::cout << "  --sync-interval [n]    Seconds between daemon synchronization runs" << std::endl;
      std::cout << "" << std::endl;
+ #ifdef BUILD_GUI
      std::cout << "Account provisioning options (non-interactive setup):" << std::endl;
-     std::cout << "  --userid [user]        The user ID to configure" << std::endl;
-@@ -303,6 +327,34 @@ CommandMode parseOptions(const QStringList &app_args, CmdOptions *options)
+@@ -318,6 +342,34 @@
              options->remotePath = it.next();
          } else if (option == u"--confdir"_s && it.hasNext() && !it.peekNext().startsWith(u"--"_s)) {
              options->config_directory = it.next();
@@ -104,10 +104,10 @@ index 163e6c4..77f03a9 100644
 +                exit(1);
 +            }
 +            options->syncIntervalSeconds = interval;
-         } else {
-             QString errorMessage;
-             if (!AccountSetupCommandLineManager::instance()->parseCommandlineOption(option, it, errorMessage)) {
-@@ -667,11 +719,85 @@ restart_sync:
+         }
+ #ifdef BUILD_GUI
+         else {
+@@ -694,11 +746,85 @@
      syncOptions.fillFromEnvironmentVariables();
      syncOptions.verifyChunkSizes();
      syncOptions.setIsCmd(true);
@@ -194,7 +194,7 @@ index 163e6c4..77f03a9 100644
      QObject::connect(&engine, &SyncEngine::transmissionProgress, &cmd, &Cmd::transmissionProgressSlot);
      QObject::connect(&engine, &SyncEngine::syncError,
          [](const QString &error) { qWarning() << "Sync error:" << error; });
-@@ -711,6 +837,13 @@ restart_sync:
+@@ -752,6 +878,13 @@
  
      int resultCode = app.exec();
  
@@ -239,38 +239,35 @@ diff --git a/src/common/vfs.cpp b/src/common/vfs.cpp
 index fab934f..ad3b798 100644
 --- a/src/common/vfs.cpp
 +++ b/src/common/vfs.cpp
-@@ -37,6 +37,8 @@ QString Vfs::modeToString(Mode mode)
-         return QStringLiteral("wincfapi");
-     case XAttr:
+@@ -39,6 +39,8 @@
          return QStringLiteral("xattr");
+     case OpenVFS:
+         return QStringLiteral("openvfs");
 +    case Fuse:
 +        return QStringLiteral("fuse");
      }
      return QStringLiteral("off");
  }
-@@ -50,6 +52,10 @@ Optional<Vfs::Mode> Vfs::modeFromString(const QString &str)
-         return WithSuffix;
-     } else if (str == QLatin1String("wincfapi")) {
-         return WindowsCfApi;
-+    } else if (str == QLatin1String("xattr")) {
-+        return XAttr;
+@@ -56,6 +58,8 @@
+         return XAttr;
+     } else if (str == QLatin1String("openvfs")) {
+         return OpenVFS;
 +    } else if (str == QLatin1String("fuse")) {
 +        return Fuse;
      }
      return {};
  }
-@@ -148,6 +154,9 @@ static QString modeToPluginName(Vfs::Mode mode)
-     if (mode == Vfs::XAttr) {
+@@ -161,6 +165,8 @@
          return QStringLiteral("xattr");
-     }
-+    if (mode == Vfs::Fuse) {
+     case Vfs::OpenVFS:
+         return QStringLiteral("openvfs");
++    case Vfs::Fuse:
 +        return QStringLiteral("fuse");
-+    }
-     return QString();
- }
+     }
  
-@@ -203,6 +212,10 @@ Vfs::Mode OCC::bestAvailableVfsMode()
-         return Vfs::WindowsCfApi;
+     return {};
+@@ -222,6 +228,10 @@
+         return Vfs::OpenVFS;
      }
  
 +    if (isVfsPluginAvailable(Vfs::Fuse)) {
@@ -284,15 +281,15 @@ diff --git a/src/common/vfs.h b/src/common/vfs.h
 index b9f6a2b..6e0f4c4 100644
 --- a/src/common/vfs.h
 +++ b/src/common/vfs.h
-@@ -116,6 +116,7 @@ public:
-         WithSuffix,
+@@ -124,6 +124,7 @@
          WindowsCfApi,
          XAttr,
+         OpenVFS,
 +        Fuse,
      };
      Q_ENUM(Mode)
      enum class ConvertToPlaceholderResult {
-@@ -167,6 +168,8 @@ public:
+@@ -175,6 +176,8 @@
      /// Access to the parameters the instance was start()ed with.
      [[nodiscard]] const VfsSetupParams &params() const { return _setupParams; }
  
@@ -301,7 +298,7 @@ index b9f6a2b..6e0f4c4 100644
  
      /** Initializes interaction with the VFS provider.
       *
-@@ -194,6 +197,10 @@ public:
+@@ -202,6 +205,10 @@
       */
      [[nodiscard]] virtual bool isHydrating() const = 0;
  
@@ -312,7 +309,7 @@ index b9f6a2b..6e0f4c4 100644
      /** Update placeholder metadata during discovery.
       *
       * If the remote metadata changes, the local placeholder's metadata should possibly
-@@ -296,6 +303,7 @@ public Q_SLOTS:
+@@ -313,6 +320,7 @@
      virtual void fileStatusChanged(const QString &systemFileName, OCC::SyncFileStatus fileStatus) = 0;
  
  Q_SIGNALS:
@@ -620,12 +617,12 @@ diff --git a/src/libsync/theme.cpp b/src/libsync/theme.cpp
 index 122cb6f..49096c3 100644
 --- a/src/libsync/theme.cpp
 +++ b/src/libsync/theme.cpp
-@@ -1051,7 +1051,7 @@ QPixmap Theme::createColorAwarePixmap(const QString &name)
+@@ -1051,7 +1051,7 @@
  bool Theme::showVirtualFilesOption() const
  {
      const auto vfsMode = bestAvailableVfsMode();
--    return ConfigFile().showExperimentalOptions() || vfsMode == Vfs::WindowsCfApi;
-+    return ConfigFile().showExperimentalOptions() || vfsMode == Vfs::WindowsCfApi || vfsMode == Vfs::Fuse;
+-    return ConfigFile().showExperimentalOptions() || vfsMode == Vfs::WindowsCfApi || vfsMode == Vfs::OpenVFS;
++    return ConfigFile().showExperimentalOptions() || vfsMode == Vfs::WindowsCfApi || vfsMode == Vfs::OpenVFS || vfsMode == Vfs::Fuse;
  }
  
  bool Theme::enforceVirtualFilesSyncFolder() const
@@ -633,12 +630,12 @@ diff --git a/src/libsync/vfs/CMakeLists.txt b/src/libsync/vfs/CMakeLists.txt
 index de48e10..4dd65bf 100644
 --- a/src/libsync/vfs/CMakeLists.txt
 +++ b/src/libsync/vfs/CMakeLists.txt
-@@ -5,7 +5,7 @@
- # that create directories for the build.
+@@ -6,7 +6,7 @@
  #file(GLOB VIRTUAL_FILE_SYSTEM_PLUGINS RELATIVE ${CMAKE_CURRENT_LIST_DIR} "*")
  
--list(APPEND VIRTUAL_FILE_SYSTEM_PLUGINS "suffix" "cfapi" "xattr")
-+list(APPEND VIRTUAL_FILE_SYSTEM_PLUGINS "suffix" "cfapi" "xattr" "fuse")
+ set(VIRTUAL_FILE_SYSTEM_PLUGINS "")
+-list(APPEND VIRTUAL_FILE_SYSTEM_PLUGINS "suffix" "cfapi" "xattr" "openvfs")
++list(APPEND VIRTUAL_FILE_SYSTEM_PLUGINS "suffix" "cfapi" "xattr" "openvfs" "fuse")
  
  message("list of plugins ${VIRTUAL_FILE_SYSTEM_PLUGINS}")
  
