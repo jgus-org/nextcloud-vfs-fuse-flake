@@ -1451,6 +1451,19 @@ Vfs::AvailabilityResult VfsFuse::availability(const QString& folderPath, const A
   return availabilityInDb(folderPath);
 }
 
+// Hydration here is driven by the fuse daemon over the control socket, so there is no job for the GUI to own.
+HydrationJob* VfsFuse::hydrateFile(
+    [[maybe_unused]] const QByteArray& fileId,
+    [[maybe_unused]] const QString& targetPath) {
+  return nullptr;
+}
+
 void VfsFuse::fileStatusChanged(const QString&, SyncFileStatus) {}
+
+Result<void, QString> FuseVfsPluginFactory::prepare(
+    [[maybe_unused]] const QString& path,
+    [[maybe_unused]] const QUuid& accountUuid) const {
+  return {};
+}
 
 }  // namespace OCC
