@@ -55,6 +55,7 @@
             install -Dm644 ${./client/nextcloudctl.cpp} src/cmd/nextcloudctl.cpp
 
             patch -p1 < ${./client/nextcloud-vfs-fuse.patch}
+            patch -p1 < ${./client/gui-account-setup-from-environment.patch}
 
           ''
           + previousAttrs.postPatch;

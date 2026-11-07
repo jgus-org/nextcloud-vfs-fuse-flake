@@ -1,0 +1,199 @@
+--- a/src/gui/accountsetupcommandlinemanager.cpp
++++ b/src/gui/accountsetupcommandlinemanager.cpp
+@@ -4,13 +4,21 @@
+  */
+ 
+ #include "accountsetupcommandlinemanager.h"
+ #include "accountsetupfromcommandlinejob.h"
+ 
++#include <QEventLoop>
++#include <QTimer>
++
+ namespace OCC
+ {
+ Q_LOGGING_CATEGORY(lcAccountSetupCommandLineManager, "nextcloud.gui.accountsetupcommandlinemanager", QtInfoMsg)
++
++// How long an unreachable server may hold up the startup of a session waiting on it. Giving
++// up on the wait does not cancel the setup: the account is created later, with the session
++// already running.
++constexpr int accountSetupFromEnvironmentTimeoutMs = 30 * 1000;
+ 
+ AccountSetupCommandLineManager *AccountSetupCommandLineManager::_instance = nullptr;
+ 
+ AccountSetupCommandLineManager::AccountSetupCommandLineManager(QObject *parent)
+     : QObject{parent}
+@@ -114,6 +122,40 @@
+         cleanUpState();
+         return false;
+     }
+ }
+ 
++void AccountSetupCommandLineManager::setupAccountFromEnvironment()
++{
++    const auto userId = qEnvironmentVariable("NC_USER");
++    const auto appPassword = qEnvironmentVariable("NC_PASSWORD");
++    const auto serverUrl = QUrl(qEnvironmentVariable("NC_SERVER_URL"));
++    const auto localDirPath = qEnvironmentVariable("NC_LOCAL_DIR");
++
++    // Half an account is worse than none: an account without something to authenticate with,
++    // or one syncing into the wrong folder, would have to be removed by hand.
++    if (userId.isEmpty() || appPassword.isEmpty() || localDirPath.isEmpty() || !serverUrl.isValid()
++        || !serverUrl.scheme().startsWith(QLatin1String("http"))) {
++        qCInfo(lcAccountSetupCommandLineManager) << "The environment does not name an account to set up, proceeding with the wizard";
++        return;
++    }
++
++    qCInfo(lcAccountSetupCommandLineManager) << QStringLiteral("No account is configured and the environment names one for %1, attempting setup...").arg(userId);
++
++    // The fuse plugin is this build's best available virtual-files mode, and the store it
++    // serves is the folder named in the environment.
++    const auto accountSetupJob = new AccountSetupFromCommandLineJob(appPassword, userId, serverUrl, localDirPath, true, QStringLiteral("/"), nullptr);
++    accountSetupJob->setQuitsApplicationWhenFinished(false);
++
++    // The account only exists once the server has accepted the credentials and the folder has
++    // been created, both of which the job reports through finished(). Starting the session
++    // afterwards keeps a client that is about to be provisioned from coming up as a wizard.
++    QEventLoop accountSetupLoop;
++    QObject::connect(accountSetupJob, &AccountSetupFromCommandLineJob::finished, &accountSetupLoop, &QEventLoop::quit);
++    QTimer::singleShot(accountSetupFromEnvironmentTimeoutMs, &accountSetupLoop, &QEventLoop::quit);
++
++    if (accountSetupJob->handleAccountSetupFromCommandLine()) {
++        accountSetupLoop.exec();
++    }
+ }
++
++}
+--- a/src/gui/accountsetupcommandlinemanager.h
++++ b/src/gui/accountsetupcommandlinemanager.h
+@@ -26,10 +26,19 @@
+     [[nodiscard]] bool isVfsEnabled() const;
+ 
+ public Q_SLOTS:
+     [[nodiscard]] bool setupAccountFromCommandLine();
+ 
++    /** Set up the account that the environment of a session without one names.
++     *
++     * NC_USER, NC_PASSWORD, NC_SERVER_URL and NC_LOCAL_DIR stand for --userid,
++     * --apppassword, --serverurl and --localdirpath. Where a command line exists to
++     * provision an account and then ends the process, this runs inside the session the
++     * account is for: the account is created first and the session continues with it.
++     */
++    void setupAccountFromEnvironment();
++
+ private:
+     explicit AccountSetupCommandLineManager(QObject *parent = nullptr);
+ 
+     static AccountSetupCommandLineManager *_instance;
+ 
+--- a/src/gui/accountsetupfromcommandlinejob.cpp
++++ b/src/gui/accountsetupfromcommandlinejob.cpp
+@@ -50,10 +50,15 @@
+     , _isVfsEnabled(isVfsEnabled)
+     , _remoteDirPath(remoteDirPath)
+ {
+ }
+ 
++void AccountSetupFromCommandLineJob::setQuitsApplicationWhenFinished(bool quits)
++{
++    _quitsApplicationWhenFinished = quits;
++}
++
+ bool AccountSetupFromCommandLineJob::localSyncFolderRequired() const
+ {
+ #ifdef BUILD_FILE_PROVIDER_MODULE
+     // Mirrors the guard in FolderMan::addFolder(): while the app-level File Provider mode
+     // is enabled, a classic sync folder cannot be created at all. The account is synced
+@@ -318,14 +323,17 @@
+         qCInfo(lcAccountSetupCommandLineJob) << status;
+         std::cout << qUtf8Printable(status) << std::endl;
+     }
+     QTimer::singleShot(0, this, [this, isFailure]() {
+         this->deleteLater();
+-        if (!isFailure) {
+-            qApp->quit();
+-        } else {
+-            qApp->exit(1);
++        Q_EMIT finished(!isFailure);
++        if (_quitsApplicationWhenFinished) {
++            if (!isFailure) {
++                qApp->quit();
++            } else {
++                qApp->exit(1);
++            }
+         }
+     });
+ }
+ 
+ void AccountSetupFromCommandLineJob::fetchUserName()
+--- a/src/gui/accountsetupfromcommandlinejob.h
++++ b/src/gui/accountsetupfromcommandlinejob.h
+@@ -25,10 +25,22 @@
+                                    QUrl serverUrl,
+                                    QString localDirPath = {},
+                                    bool isVfsEnabled = false,
+                                    QString remoteDirPath = QStringLiteral("/"),
+                                    QObject *parent = nullptr);
++
++    /** Whether reporting the result ends the process.
++     *
++     * A command line that provisions an account exists only to do that, so the process ends
++     * with the account. A session that sets up its own account has to continue afterwards:
++     * it clears this and waits for finished() instead.
++     */
++    void setQuitsApplicationWhenFinished(bool quits);
++
++Q_SIGNALS:
++    /** Emitted once the account is set up, or the setup has reported that it failed. */
++    void finished(bool success);
+ 
+ public Q_SLOTS:
+     [[nodiscard]] bool handleAccountSetupFromCommandLine();
+ 
+ private Q_SLOTS:
+@@ -63,9 +75,10 @@
+     QString _userId;
+     QUrl _serverUrl;
+     QString _localDirPath;
+     bool _isVfsEnabled = true;
+     QString _remoteDirPath;
++    bool _quitsApplicationWhenFinished = true;
+ 
+     AccountPtr _account;
+ };
+ }
+--- a/src/gui/application.cpp
++++ b/src/gui/application.cpp
+@@ -442,10 +442,15 @@
+     if (AccountSetupCommandLineManager::instance()->isCommandLineParsed()) {
+         if (!AccountSetupCommandLineManager::instance()->setupAccountFromCommandLine()) {
+             qCWarning(lcApplication()) << "setup of the account had some issues and could not be completed";
+         }
+         _quitInstance = true;
++    } else if (AccountManager::instance()->accounts().isEmpty()) {
++        // A session started where nobody is there to complete a wizard sets up the account
++        // its environment names, and continues with it.
++        AccountSetupCommandLineManager::instance()->setupAccountFromEnvironment();
++        FolderMan::instance()->setSyncEnabled(true);
+     }
+     AccountSetupCommandLineManager::destroy();
+     if (_quitInstance) {
+         return;
+     }
+@@ -998,10 +1003,17 @@
+ }
+ 
+ void Application::slotActivateRequestedMessage(const QStringList &arguments, const QString &workingDirectory)
+ {
+     Q_UNUSED(workingDirectory)
++
++    if (!_gui) {
++        // Both branches below reach the window and the tray, which a client that is still
++        // starting up does not have yet.
++        qCWarning(lcApplication) << "Ignoring a request from another client instance, the client has not finished starting up";
++        return;
++    }
+ 
+     if (arguments.size() == 1) {
+         showMainDialogRemoteCommand();
+     } else {
+         parseOptionsRemoteCommand(arguments);
