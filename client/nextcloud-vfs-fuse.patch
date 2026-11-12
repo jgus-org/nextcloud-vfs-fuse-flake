@@ -600,16 +600,13 @@ index b9a1a44..89bf9fe 100644
              _pinState != PinState::AlwaysLocal &&
              !FileSystem::isExcludeFile(item->_file) &&
              !item->isEncrypted()) {
-@@ -746,7 +746,11 @@ void ProcessDirectoryJob::processFileAnalyzeRemoteInfo(const SyncFileItemPtr &it
-     item->_isShared = serverEntry.remotePerm.hasPermission(RemotePermissions::IsShared) || serverEntry.sharedByMe;
-     item->_sharedByMe = serverEntry.sharedByMe;
-     item->_lastShareStateFetchedTimestamp = QDateTime::currentMSecsSinceEpoch();
--    item->_type = serverEntry.isDirectory ? ItemTypeDirectory : ItemTypeFile;
-+    const auto remainsUndiscovered = dbEntry._type == ItemTypeVirtualDirectory
-+        && dbEntry._etag != QByteArrayLiteral("_invalid_")
-+        && _pinState != PinState::AlwaysLocal
-+        && _discoveryData->_syncOptions._vfs->demandDrivenDiscoveryEnabled();
-+    item->_type = remainsUndiscovered ? ItemTypeVirtualDirectory : serverEntry.isDirectory ? ItemTypeDirectory : ItemTypeFile;
+@@ -750,3 +750,9 @@ void ProcessDirectoryJob::processFileAnalyzeRemoteInfo(const SyncFileItemPtr &it
++    if (_discoveryData->_syncOptions._vfs && _discoveryData->_syncOptions._vfs->demandDrivenDiscoveryEnabled()) {
++        const auto remainsUndiscovered = dbEntry._type == ItemTypeVirtualDirectory
++            && dbEntry._etag != QByteArrayLiteral("_invalid_")
++            && _pinState != PinState::AlwaysLocal;
++        item->_type = remainsUndiscovered ? ItemTypeVirtualDirectory : serverEntry.isDirectory ? ItemTypeDirectory : ItemTypeFile;
++    }
      item->_etag = serverEntry.etag;
      item->_directDownloadUrl = serverEntry.directDownloadUrl;
      item->_directDownloadCookies = serverEntry.directDownloadCookies;
