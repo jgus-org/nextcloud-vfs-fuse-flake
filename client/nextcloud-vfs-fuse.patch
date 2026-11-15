@@ -266,16 +266,16 @@ index fab934f..ad3b798 100644
      }
  
      return {};
-@@ -222,6 +228,10 @@
-         return Vfs::OpenVFS;
+@@ -218,6 +224,10 @@
+         return Vfs::WindowsCfApi;
      }
  
 +    if (isVfsPluginAvailable(Vfs::Fuse)) {
 +        return Vfs::Fuse;
 +    }
 +
-     if (isVfsPluginAvailable(Vfs::WithSuffix)) {
-         return Vfs::WithSuffix;
+     if (isVfsPluginAvailable(Vfs::OpenVFS)) {
+         return Vfs::OpenVFS;
      }
 diff --git a/src/common/vfs.h b/src/common/vfs.h
 index b9f6a2b..6e0f4c4 100644
