@@ -61,7 +61,7 @@ struct FuseHydrationRequest : QObject {
   QTimer* watchdog;
   QByteArray input;
   FuseHydrationPhase phase = FuseHydrationPhase::AwaitingRequest;
-  HydrationJob* job = nullptr;
+  CfApiHydrationJob* job = nullptr;
   SyncJournalFileRecord record;
   bool jobFinished = false;
   bool finalized = false;
@@ -571,16 +571,16 @@ QString availabilityName(VfsItemAvailability availability) {
   return QStringLiteral("invalid");
 }
 
-QString hydrationFailure(const HydrationJob& job) {
+QString hydrationFailure(const CfApiHydrationJob& job) {
   if (!job.errorString().isEmpty()) {
     return job.errorString();
   }
   switch (job.status()) {
-    case HydrationJob::Success:
+    case CfApiHydrationJob::Success:
       return {};
-    case HydrationJob::Error:
+    case CfApiHydrationJob::Error:
       return QStringLiteral("the remote download failed");
-    case HydrationJob::Cancelled:
+    case CfApiHydrationJob::Cancelled:
       return QStringLiteral("the hydration request was cancelled");
   }
   return QStringLiteral("the hydration job returned an invalid status");
@@ -964,7 +964,7 @@ void VfsFuse::beginHydration(FuseHydrationRequest* request, const QString& folde
 
   const auto wasHydrating = isHydrating();
   request->phase = FuseHydrationPhase::Downloading;
-  request->job = new HydrationJob(this);
+  request->job = new CfApiHydrationJob(this);
   request->job->setAccount(params().account);
   request->job->setRemoteSyncRootPath(params().remotePath);
   request->job->setLocalPath(params().filesystemPath);
@@ -974,7 +974,7 @@ void VfsFuse::beginHydration(FuseHydrationRequest* request, const QString& folde
   request->job->setIsEncryptedFile(request->record.isE2eEncrypted());
   request->job->setE2eMangledName(request->record._e2eMangledName);
   request->job->setFileTotalSize(request->record._fileSize);
-  connect(request->job, &HydrationJob::finished, this, [this, request] { hydrationJobFinished(request); });
+  connect(request->job, &CfApiHydrationJob::finished, this, [this, request] { hydrationJobFinished(request); });
 
   if (!wasHydrating) {
     emit beginHydrating();
@@ -1014,7 +1014,7 @@ void VfsFuse::hydrationJobFinished(FuseHydrationRequest* request) {
     abortHydration(request, tr("The hydration-complete response could not be sent"));
     return;
   }
-  if (request->job->status() != HydrationJob::Success) {
+  if (request->job->status() != CfApiHydrationJob::Success) {
     const auto error = request->abortReason.isEmpty() ? hydrationFailure(*request->job) : request->abortReason;
     finalizeHydration(request, false, 0, error);
   }
@@ -1035,7 +1035,7 @@ void VfsFuse::abortHydration(FuseHydrationRequest* request, const QString& error
 }
 
 Result<void, QString> VfsFuse::commitHydration(FuseHydrationRequest* request, qint64 transferredBytes) {
-  if (!request->jobFinished || request->job->status() != HydrationJob::Success) {
+  if (!request->jobFinished || request->job->status() != CfApiHydrationJob::Success) {
     return tr("The remote download did not finish successfully");
   }
   if (transferredBytes != request->record._fileSize) {

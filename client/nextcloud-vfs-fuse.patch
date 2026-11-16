@@ -636,8 +636,30 @@ index de48e10..4dd65bf 100644
  
  message("list of plugins ${VIRTUAL_FILE_SYSTEM_PLUGINS}")
  
+diff --git a/src/libsync/vfs/cfapi/cfapiwrapper.cpp b/src/libsync/vfs/cfapi/cfapiwrapper.cpp
+index f538c4c..274d941 100644
+--- a/src/libsync/vfs/cfapi/cfapiwrapper.cpp
++++ b/src/libsync/vfs/cfapi/cfapiwrapper.cpp
+@@ -395,7 +395,7 @@ void CALLBACK cfApiFetchDataCallback(const CF_CALLBACK_INFO *callbackInfo, const
+         sendTransferInfo(protrudingData, dataOffset);
+     }
+ 
+-    int hydrationJobResult = OCC::HydrationJob::Status::Error;
++    int hydrationJobResult = OCC::CfApiHydrationJob::Status::Error;
+     const auto invokeFinalizeResult = QMetaObject::invokeMethod(
+         vfs,
+         [&hydrationJobResult, vfs, requestId] {
+@@ -407,7 +407,7 @@ void CALLBACK cfApiFetchDataCallback(const CF_CALLBACK_INFO *callbackInfo, const
+         qCritical(lcCfApiWrapper) << "Failed to finalize hydration job for" << path << requestId;
+     }
+ 
+-    if (static_cast<OCC::HydrationJob::Status>(hydrationJobResult) != OCC::HydrationJob::Success) {
++    if (static_cast<OCC::CfApiHydrationJob::Status>(hydrationJobResult) != OCC::CfApiHydrationJob::Success) {
+         sendTransferError();
+     }
+ }
 diff --git a/src/libsync/vfs/cfapi/hydrationjob.cpp b/src/libsync/vfs/cfapi/hydrationjob.cpp
-index dc03117..8730b8b 100644
+index dc03117..0f5f2ad 100644
 --- a/src/libsync/vfs/cfapi/hydrationjob.cpp
 +++ b/src/libsync/vfs/cfapi/hydrationjob.cpp
 @@ -7,7 +7,7 @@
@@ -649,20 +671,285 @@ index dc03117..8730b8b 100644
  #include <clientsideencryptionjobs.h>
  #include "encryptedfoldermetadatahandler.h"
  #include "foldermetadata.h"
+@@ -19,124 +19,124 @@
+ 
+ Q_LOGGING_CATEGORY(lcHydration, "nextcloud.sync.vfs.hydrationjob", QtInfoMsg)
+ 
+-OCC::HydrationJob::HydrationJob(QObject *parent)
++OCC::CfApiHydrationJob::CfApiHydrationJob(QObject *parent)
+     : QObject(parent)
+ {
+ }
+ 
+-OCC::HydrationJob::~HydrationJob() = default;
++OCC::CfApiHydrationJob::~CfApiHydrationJob() = default;
+ 
+-OCC::AccountPtr OCC::HydrationJob::account() const
++OCC::AccountPtr OCC::CfApiHydrationJob::account() const
+ {
+     return _account;
+ }
+ 
+-void OCC::HydrationJob::setAccount(const AccountPtr &account)
++void OCC::CfApiHydrationJob::setAccount(const AccountPtr &account)
+ {
+     _account = account;
+ }
+ 
+-QString OCC::HydrationJob::remoteSyncRootPath() const
++QString OCC::CfApiHydrationJob::remoteSyncRootPath() const
+ {
+     return _remoteSyncRootPath;
+ }
+ 
+-void OCC::HydrationJob::setRemoteSyncRootPath(const QString &path)
++void OCC::CfApiHydrationJob::setRemoteSyncRootPath(const QString &path)
+ {
+     _remoteSyncRootPath = Utility::noLeadingSlashPath(path);
+ }
+ 
+-QString OCC::HydrationJob::localPath() const
++QString OCC::CfApiHydrationJob::localPath() const
+ {
+     return _localPath;
+ }
+ 
+-void OCC::HydrationJob::setLocalPath(const QString &localPath)
++void OCC::CfApiHydrationJob::setLocalPath(const QString &localPath)
+ {
+     _localPath = localPath;
+ }
+ 
+-OCC::SyncJournalDb *OCC::HydrationJob::journal() const
++OCC::SyncJournalDb *OCC::CfApiHydrationJob::journal() const
+ {
+     return _journal;
+ }
+ 
+-void OCC::HydrationJob::setJournal(SyncJournalDb *journal)
++void OCC::CfApiHydrationJob::setJournal(SyncJournalDb *journal)
+ {
+     _journal = journal;
+ }
+ 
+-QString OCC::HydrationJob::requestId() const
++QString OCC::CfApiHydrationJob::requestId() const
+ {
+     return _requestId;
+ }
+ 
+-void OCC::HydrationJob::setRequestId(const QString &requestId)
++void OCC::CfApiHydrationJob::setRequestId(const QString &requestId)
+ {
+     _requestId = requestId;
+ }
+ 
+-QString OCC::HydrationJob::folderPath() const
++QString OCC::CfApiHydrationJob::folderPath() const
+ {
+     return _folderPath;
+ }
+ 
+-void OCC::HydrationJob::setFolderPath(const QString &folderPath)
++void OCC::CfApiHydrationJob::setFolderPath(const QString &folderPath)
+ {
+     _folderPath = folderPath;
+ }
+ 
+-bool OCC::HydrationJob::isEncryptedFile() const
++bool OCC::CfApiHydrationJob::isEncryptedFile() const
+ {
+     return _isEncryptedFile;
+ }
+ 
+-void OCC::HydrationJob::setIsEncryptedFile(bool isEncrypted)
++void OCC::CfApiHydrationJob::setIsEncryptedFile(bool isEncrypted)
+ {
+     _isEncryptedFile = isEncrypted;
+ }
+ 
+-QString OCC::HydrationJob::e2eMangledName() const
++QString OCC::CfApiHydrationJob::e2eMangledName() const
+ {
+     return _e2eMangledName;
+ }
+ 
+-void OCC::HydrationJob::setE2eMangledName(const QString &e2eMangledName)
++void OCC::CfApiHydrationJob::setE2eMangledName(const QString &e2eMangledName)
+ {
+     _e2eMangledName = e2eMangledName;
+ }
+ 
+-qint64 OCC::HydrationJob::fileTotalSize() const
++qint64 OCC::CfApiHydrationJob::fileTotalSize() const
+ {
+     return _fileTotalSize;
+ }
+ 
+-void OCC::HydrationJob::setFileTotalSize(qint64 fileTotalSize)
++void OCC::CfApiHydrationJob::setFileTotalSize(qint64 fileTotalSize)
+ {
+     _fileTotalSize = fileTotalSize;
+ }
+ 
+-OCC::HydrationJob::Status OCC::HydrationJob::status() const
++OCC::CfApiHydrationJob::Status OCC::CfApiHydrationJob::status() const
+ {
+     return _status;
+ }
+ 
+-int OCC::HydrationJob::errorCode() const
++int OCC::CfApiHydrationJob::errorCode() const
+ {
+     return _errorCode;
+ }
+ 
+-int OCC::HydrationJob::statusCode() const
++int OCC::CfApiHydrationJob::statusCode() const
+ {
+     return _statusCode;
+ }
+ 
+-QString OCC::HydrationJob::errorString() const
++QString OCC::CfApiHydrationJob::errorString() const
+ {
+     return _errorString;
+ }
+ 
+-void OCC::HydrationJob::start()
++void OCC::CfApiHydrationJob::start()
+ {
+     Q_ASSERT(_account);
+     Q_ASSERT(_journal);
+@@ -169,7 +169,7 @@ void OCC::HydrationJob::start()
+     if (!_signalServer) {
+         return;
+     }
+-    connect(_signalServer, &QLocalServer::newConnection, this, &HydrationJob::onCancellationServerNewConnection);
++    connect(_signalServer, &QLocalServer::newConnection, this, &CfApiHydrationJob::onCancellationServerNewConnection);
+ 
+     // Start transfer data server
+     _transferDataServer = startServer(_requestId);
+@@ -177,10 +177,10 @@ void OCC::HydrationJob::start()
+     if (!_transferDataServer) {
+         return;
+     }
+-    connect(_transferDataServer, &QLocalServer::newConnection, this, &HydrationJob::onNewConnection);
++    connect(_transferDataServer, &QLocalServer::newConnection, this, &CfApiHydrationJob::onNewConnection);
+ }
+ 
+-void OCC::HydrationJob::cancel()
++void OCC::CfApiHydrationJob::cancel()
+ {
+     _isCancelled = true;
+     if (_job) {
+@@ -198,7 +198,7 @@ void OCC::HydrationJob::cancel()
+     emitFinished(Cancelled);
+ }
+ 
+-void OCC::HydrationJob::emitFinished(Status status)
++void OCC::CfApiHydrationJob::emitFinished(Status status)
+ {
+     _status = status;
+     if (_signalSocket) {
+@@ -221,7 +221,7 @@ void OCC::HydrationJob::emitFinished(Status status)
+     Q_EMIT finished(this);
+ }
+ 
+-void OCC::HydrationJob::onCancellationServerNewConnection()
++void OCC::CfApiHydrationJob::onCancellationServerNewConnection()
+ {
+     Q_ASSERT(!_signalSocket);
+ 
+@@ -229,7 +229,7 @@ void OCC::HydrationJob::onCancellationServerNewConnection()
+     _signalSocket = _signalServer->nextPendingConnection();
+ }
+ 
+-void OCC::HydrationJob::onNewConnection()
++void OCC::CfApiHydrationJob::onNewConnection()
+ {
+     Q_ASSERT(!_transferDataSocket);
+     Q_ASSERT(!_job);
 @@ -241,7 +241,7 @@ void OCC::HydrationJob::onNewConnection()
      }
  }
  
 -void OCC::HydrationJob::finalize(OCC::VfsCfApi *vfs)
-+void OCC::HydrationJob::finalize(OCC::Vfs *vfs)
++void OCC::CfApiHydrationJob::finalize(OCC::Vfs *vfs)
  {
      // Mark the file as hydrated in the sync journal
      SyncJournalFileRecord record;
+@@ -285,7 +285,7 @@ void OCC::HydrationJob::finalize(OCC::VfsCfApi *vfs)
+     }
+ }
+ 
+-void OCC::HydrationJob::slotFetchMetadataJobFinished(int statusCode, const QString &message)
++void OCC::CfApiHydrationJob::slotFetchMetadataJobFinished(int statusCode, const QString &message)
+ {
+     if (statusCode != 200) {
+         qCCritical(lcHydration) << "Failed to find encrypted metadata information of remote file" << e2eMangledName() << message;
+@@ -293,7 +293,7 @@ void OCC::HydrationJob::slotFetchMetadataJobFinished(int statusCode, const QStri
+         return;
+     }
+ 
+-    // TODO: the following code is borrowed from PropagateDownloadEncrypted (see HydrationJob::onNewConnection() for explanation of next steps)
++    // TODO: the following code is borrowed from PropagateDownloadEncrypted (see CfApiHydrationJob::onNewConnection() for explanation of next steps)
+     qCDebug(lcHydration) << "Metadata Received reading" << e2eMangledName();
+     const auto metadata = _encryptedFolderMetadataHandler->folderMetadata();
+     if (!metadata->isValid()) {
+@@ -313,14 +313,14 @@ void OCC::HydrationJob::slotFetchMetadataJobFinished(int statusCode, const QStri
+                 _job->setDecompressionThresholdBase(_fileTotalSize);
+             }
+ 
+-            connect(qobject_cast<GETEncryptedFileJob *>(_job), &GETEncryptedFileJob::finishedSignal, this, &HydrationJob::onGetFinished);
++            connect(qobject_cast<GETEncryptedFileJob *>(_job), &GETEncryptedFileJob::finishedSignal, this, &CfApiHydrationJob::onGetFinished);
+             _job->start();
+             return;
+         }
+     }
+ }
+ 
+-void OCC::HydrationJob::onGetFinished()
++void OCC::CfApiHydrationJob::onGetFinished()
+ {
+     _errorCode = _job->reply()->error();
+     _statusCode = _job->reply()->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+@@ -349,7 +349,7 @@ void OCC::HydrationJob::onGetFinished()
+     emitFinished(Success);
+ }
+ 
+-void OCC::HydrationJob::handleNewConnection()
++void OCC::CfApiHydrationJob::handleNewConnection()
+ {
+     qCInfo(lcHydration) << "Got new connection starting GETFileJob" << _requestId << _folderPath;
+     _transferDataSocket = _transferDataServer->nextPendingConnection();
+@@ -357,11 +357,11 @@ void OCC::HydrationJob::handleNewConnection()
+     if (_fileTotalSize >= 0) {
+         _job->setDecompressionThresholdBase(_fileTotalSize);
+     }
+-    connect(_job, &GETFileJob::finishedSignal, this, &HydrationJob::onGetFinished);
++    connect(_job, &GETFileJob::finishedSignal, this, &CfApiHydrationJob::onGetFinished);
+     _job->start();
+ }
+ 
+-void OCC::HydrationJob::handleNewConnectionForEncryptedFile()
++void OCC::CfApiHydrationJob::handleNewConnectionForEncryptedFile()
+ {
+     // TODO: the following code is borrowed from PropagateDownloadEncrypted (should we factor it out and reuse? YES! Should we do it now? Probably not, as, this would imply modifying PropagateDownloadEncrypted, so we need a separate PR)
+     qCInfo(lcHydration) << "Got new connection for encrypted file. Getting required info for decryption...";
+@@ -379,6 +379,6 @@ void OCC::HydrationJob::handleNewConnectionForEncryptedFile()
+     connect(_encryptedFolderMetadataHandler.data(),
+             &EncryptedFolderMetadataHandler::fetchFinished,
+             this,
+-            &HydrationJob::slotFetchMetadataJobFinished);
++            &CfApiHydrationJob::slotFetchMetadataJobFinished);
+     _encryptedFolderMetadataHandler->fetchMetadata();
+ }
 diff --git a/src/libsync/vfs/cfapi/hydrationjob.h b/src/libsync/vfs/cfapi/hydrationjob.h
-index 83232d2..61daedb 100644
+index 83232d2..7d1c838 100644
 --- a/src/libsync/vfs/cfapi/hydrationjob.h
 +++ b/src/libsync/vfs/cfapi/hydrationjob.h
-@@ -15,7 +15,7 @@ namespace OCC {
+@@ -15,13 +15,13 @@ namespace OCC {
  class EncryptedFolderMetadataHandler;
  class GETFileJob;
  class SyncJournalDb;
@@ -671,7 +958,26 @@ index 83232d2..61daedb 100644
  
  namespace EncryptionHelper {
      class StreamingDecryptor;
-@@ -71,7 +71,7 @@ public:
+ };
+ 
+-class HydrationJob : public QObject
++class CfApiHydrationJob : public QObject
+ {
+     Q_OBJECT
+ public:
+@@ -32,9 +32,9 @@ public:
+     };
+     Q_ENUM(Status)
+ 
+-    explicit HydrationJob(QObject *parent = nullptr);
++    explicit CfApiHydrationJob(QObject *parent = nullptr);
+ 
+-    ~HydrationJob() override;
++    ~CfApiHydrationJob() override;
+ 
+     AccountPtr account() const;
+     void setAccount(const AccountPtr &account);
+@@ -71,10 +71,10 @@ public:
  
      void start();
      void cancel();
@@ -679,7 +985,122 @@ index 83232d2..61daedb 100644
 +    void finalize(OCC::Vfs *vfs);
  
  Q_SIGNALS:
-     void finished(HydrationJob *job);
+-    void finished(HydrationJob *job);
++    void finished(CfApiHydrationJob *job);
+ 
+ private Q_SLOTS:
+     void slotFetchMetadataJobFinished(int statusCode, const QString &message);
+diff --git a/src/libsync/vfs/cfapi/vfs_cfapi.cpp b/src/libsync/vfs/cfapi/vfs_cfapi.cpp
+index 87b1fd3..5c2db69 100644
+--- a/src/libsync/vfs/cfapi/vfs_cfapi.cpp
++++ b/src/libsync/vfs/cfapi/vfs_cfapi.cpp
+@@ -101,7 +101,7 @@ namespace OCC
+ class VfsCfApiPrivate
+ {
+ public:
+-    QList<HydrationJob *> hydrationJobs;
++    QList<CfApiHydrationJob *> hydrationJobs;
+     CF_CONNECTION_KEY connectionKey = {};
+ };
+ 
+@@ -338,7 +338,7 @@ bool VfsCfApi::statTypeVirtualFile(csync_file_stat_t *stat, void *statData)
+     return false;
+ }
+ 
+-HydrationJob *VfsCfApi::hydrateFile(const QByteArray &fileId, const QString &targetPath)
++CfApiHydrationJob *VfsCfApi::hydrateFile(const QByteArray &fileId, const QString &targetPath)
+ {
+     return nullptr;
+ }
+@@ -434,10 +434,10 @@ Vfs::AvailabilityResult VfsCfApi::availability(const QString &folderPath, const
+     }
+ }
+ 
+-HydrationJob *VfsCfApi::findHydrationJob(const QString &requestId) const
++CfApiHydrationJob *VfsCfApi::findHydrationJob(const QString &requestId) const
+ {
+     // Find matching hydration job for request id
+-    const auto hydrationJobsIter = std::find_if(d->hydrationJobs.cbegin(), d->hydrationJobs.cend(), [&](const HydrationJob *job) {
++    const auto hydrationJobsIter = std::find_if(d->hydrationJobs.cbegin(), d->hydrationJobs.cend(), [&](const CfApiHydrationJob *job) {
+         return job->requestId() == requestId;
+     });
+ 
+@@ -505,7 +505,7 @@ void VfsCfApi::fileStatusChanged(const QString &systemFileName, SyncFileStatus f
+ 
+ void VfsCfApi::scheduleHydrationJob(const QString &requestId, const QString &folderPath, const SyncJournalFileRecord &record)
+ {
+-    const auto jobAlreadyScheduled = std::any_of(std::cbegin(d->hydrationJobs), std::cend(d->hydrationJobs), [=](HydrationJob *job) {
++    const auto jobAlreadyScheduled = std::any_of(std::cbegin(d->hydrationJobs), std::cend(d->hydrationJobs), [=](CfApiHydrationJob *job) {
+         return job->requestId() == requestId || job->folderPath() == folderPath;
+     });
+ 
+@@ -519,7 +519,7 @@ void VfsCfApi::scheduleHydrationJob(const QString &requestId, const QString &fol
+         Q_EMIT beginHydrating();
+     }
+ 
+-    auto job = new HydrationJob(this);
++    auto job = new CfApiHydrationJob(this);
+     job->setAccount(params().account);
+     job->setRemoteSyncRootPath(params().remotePath);
+     job->setLocalPath(params().filesystemPath);
+@@ -529,13 +529,13 @@ void VfsCfApi::scheduleHydrationJob(const QString &requestId, const QString &fol
+     job->setIsEncryptedFile(record.isE2eEncrypted());
+     job->setE2eMangledName(record._e2eMangledName);
+     job->setFileTotalSize(record._fileSize);
+-    connect(job, &HydrationJob::finished, this, &VfsCfApi::onHydrationJobFinished);
++    connect(job, &CfApiHydrationJob::finished, this, &VfsCfApi::onHydrationJobFinished);
+     d->hydrationJobs << job;
+     job->start();
+     Q_EMIT hydrationRequestReady(requestId);
+ }
+ 
+-void VfsCfApi::onHydrationJobFinished(HydrationJob *job)
++void VfsCfApi::onHydrationJobFinished(CfApiHydrationJob *job)
+ {
+     Q_ASSERT(d->hydrationJobs.contains(job));
+     qCInfo(lcCfApi) << "Hydration job finished" << job->requestId() << job->folderPath() << job->status();
+@@ -563,7 +563,7 @@ int VfsCfApi::finalizeHydrationJob(const QString &requestId)
+         return hydrationJob->status();
+     }
+ 
+-    return HydrationJob::Status::Error;
++    return CfApiHydrationJob::Status::Error;
+ }
+ 
+ int VfsCfApi::finalizeNewPlaceholders(const QList<PlaceholderCreateInfo> &newEntries, const QString &pathString)
+diff --git a/src/libsync/vfs/cfapi/vfs_cfapi.h b/src/libsync/vfs/cfapi/vfs_cfapi.h
+index 8b860ff..c10705e 100644
+--- a/src/libsync/vfs/cfapi/vfs_cfapi.h
++++ b/src/libsync/vfs/cfapi/vfs_cfapi.h
+@@ -13,7 +13,7 @@
+ #include <ntstatus.h>
+ 
+ namespace OCC {
+-class HydrationJob;
++class CfApiHydrationJob;
+ class VfsCfApiPrivate;
+ class SyncJournalFileRecord;
+ 
+@@ -49,7 +49,7 @@ public:
+     bool needsMetadataUpdate(const SyncFileItem &) override;
+     bool isDehydratedPlaceholder(const QString &filePath) override;
+     bool statTypeVirtualFile(csync_file_stat_t *stat, void *statData) override;
+-    [[nodiscard]] HydrationJob *hydrateFile(const QByteArray &fileId, const QString &targetPath) override;
++    [[nodiscard]] CfApiHydrationJob *hydrateFile(const QByteArray &fileId, const QString &targetPath) override;
+ 
+     bool setPinState(const QString &folderPath, PinState state) override;
+     Optional<PinState> pinState(const QString &folderPath) override;
+@@ -76,8 +76,8 @@ protected:
+ 
+ private:
+     void scheduleHydrationJob(const QString &requestId, const QString &folderPath, const SyncJournalFileRecord &record);
+-    void onHydrationJobFinished(HydrationJob *job);
+-    HydrationJob *findHydrationJob(const QString &requestId) const;
++    void onHydrationJobFinished(CfApiHydrationJob *job);
++    CfApiHydrationJob *findHydrationJob(const QString &requestId) const;
+ 
+     bool setPinStateLocal(const QString &localPath, PinState state);
+     [[nodiscard]] Optional<PinState> pinStateLocal(const QString &localPath) const;
 diff --git a/test/CMakeLists.txt b/test/CMakeLists.txt
 index 16ddc58..052cffd 100644
 --- a/test/CMakeLists.txt

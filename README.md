@@ -64,7 +64,7 @@ The sync client's own database files are hidden from the mount: names containing
 
 While a file is open through the mount, the daemon holds an exclusive lease on it, named `<runtime directory>/nextcloud-vfs-fuse-<digest>.replacement-lock`; the sync client will not atomically replace that file until the last open handle is closed.
 
-The `fuse` virtual-files backend, its xattrs, and the `nextcloudctl` tool come from this repository's patch to the client, so a backing store written by this build is understood only by this build. The patched `nextcloudcmd` gains `--vfs fuse`, `--root-pin {unspecified,alwayslocal,onlineonly}`, and `--vfs-daemon` (keep serving virtual files and synchronize periodically); `nextcloud-vfs-fused --help` lists the daemon's own options.
+The `fuse` virtual-files backend, its xattrs, and the `nextcloudctl` tool come from this repository's patch to the client, so a backing store written by this build is understood only by this build. The patch also renames upstream's CfAPI hydration job to `OCC::CfApiHydrationJob`, which is why it touches files in the Windows-only CfAPI plugin: the `fuse` backend compiles that job, and on Linux its original name would collide with the `OCC::HydrationJob` that libsync itself exports for the socket API and the OpenVFS plugin. The patched `nextcloudcmd` gains `--vfs fuse`, `--root-pin {unspecified,alwayslocal,onlineonly}`, and `--vfs-daemon` (keep serving virtual files and synchronize periodically); `nextcloud-vfs-fused --help` lists the daemon's own options.
 
 The GUI client provisions an account from its command line: `nextcloud --userid <user> --serverurl <url> --localdirpath <store> [--remotedirpath <path>] --isvfsenabled 1` adds the account and one sync folder, then exits.
 
