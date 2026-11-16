@@ -16,7 +16,6 @@ class QJsonObject;
 
 namespace OCC {
 
-class HydrationJob;
 struct FuseHydrationRequest;
 
 class VfsFuse : public Vfs {
